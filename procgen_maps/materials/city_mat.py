@@ -15,6 +15,12 @@ carries the emissive night-mode glow - since real geometric windows exist
 now, the glow belongs on them rather than faked via noise on the wall
 material. Both materials' NIGHT_MODE_NODE_NAME value node are toggled
 together by `set_night_mode`, which ui/operators.py's night-mode toggle calls.
+
+The wall material also mixes in a per-object noise-driven "grain" (using
+Object-space coordinates, so the pattern is stable per building rather than
+flickering with world position) for subtle concrete/panel variation on top
+of the flat facade color, plus a matching Bump for micro-surface detail -
+both pure shading tricks, no extra geometry or texture files needed.
 """
 
 CITY_MATERIAL_NAME = "ProcgenMaps_CityFacade"
@@ -102,7 +108,43 @@ def get_or_create_city_material():
     tint_mix.inputs[0].default_value = 1.0
     links.new(color_ramp.outputs["Color"], tint_mix.inputs[6])
     links.new(tint_color.outputs["Color"], tint_mix.inputs[7])
-    links.new(tint_mix.outputs[2], bsdf.inputs["Base Color"])
+
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    tex_coord.location = (-700, -150)
+
+    grain_noise = nodes.new("ShaderNodeTexNoise")
+    grain_noise.location = (-500, -150)
+    grain_noise.inputs["Scale"].default_value = 25.0
+    grain_noise.inputs["Detail"].default_value = 5.0
+    links.new(tex_coord.outputs["Object"], grain_noise.inputs["Vector"])
+
+    grain_remap = nodes.new("ShaderNodeMapRange")
+    grain_remap.location = (-300, -150)
+    grain_remap.inputs["To Min"].default_value = 0.9
+    grain_remap.inputs["To Max"].default_value = 1.1
+    links.new(grain_noise.outputs["Fac"], grain_remap.inputs["Value"])
+
+    grain_color = nodes.new("ShaderNodeCombineColor")
+    grain_color.location = (-100, -150)
+    links.new(grain_remap.outputs["Result"], grain_color.inputs[0])
+    links.new(grain_remap.outputs["Result"], grain_color.inputs[1])
+    links.new(grain_remap.outputs["Result"], grain_color.inputs[2])
+
+    grain_mix = nodes.new("ShaderNodeMix")
+    grain_mix.location = (200, 150)
+    grain_mix.data_type = 'RGBA'
+    grain_mix.blend_type = 'MULTIPLY'
+    grain_mix.inputs[0].default_value = 1.0
+    links.new(tint_mix.outputs[2], grain_mix.inputs[6])
+    links.new(grain_color.outputs["Color"], grain_mix.inputs[7])
+    links.new(grain_mix.outputs[2], bsdf.inputs["Base Color"])
+
+    bump = nodes.new("ShaderNodeBump")
+    bump.location = (300, -150)
+    bump.inputs["Strength"].default_value = 0.1
+    bump.inputs["Distance"].default_value = 0.2
+    links.new(grain_noise.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
 
     return mat
 

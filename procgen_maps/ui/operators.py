@@ -8,7 +8,7 @@ from ..config import presets as preset_config
 from ..config import settings as global_settings
 from ..generators import city as city_gen
 from ..generators import terrain as terrain_gen
-from ..materials import city_mat, terrain_mat
+from ..materials import city_mat, terrain_mat, world_mat
 from ..utils._registry import register_classes, unregister_classes
 from ..utils.profiler import Profiler, count_scene_stats
 
@@ -80,9 +80,16 @@ def _assign_city_material(building_objects):
 
 
 def apply_night_mode(context, enabled: bool):
-    """Toggle emissive building windows and street-lamp point lights."""
+    """Toggle emissive building windows, street-lamp point lights, and dip
+    the procedural sky's sun below the horizon (reusing the same Nishita
+    sky rather than swapping to a separate flat-color night world, so the
+    horizon glow/stars-less dusk tone comes from the same physical model)."""
     city_mat.set_night_mode(enabled)
     _update_lamp_lights(enabled)
+    if enabled:
+        world_mat.set_sun_position(context.scene.world, sun_elevation=-0.05, sun_rotation=2.4)
+    else:
+        world_mat.set_sun_position(context.scene.world, sun_elevation=0.6, sun_rotation=2.4)
 
 
 def _update_lamp_lights(enabled: bool):
@@ -151,6 +158,7 @@ class PROCGEN_OT_generate_terrain(bpy.types.Operator):
             mat = bpy.data.materials.get(terrain_mat.TERRAIN_MATERIAL_NAME)
             if mat is not None and mat.name not in obj.data.materials.keys():
                 obj.data.materials.append(mat)
+            context.scene.world = world_mat.get_or_create_sky_world()
         _write_stats(context.scene, profiler, [obj])
         _switch_viewport_to_material_preview(context)
         self.report({'INFO'}, f"Terrain generated ({params.resolution}x{params.resolution})")

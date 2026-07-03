@@ -6,7 +6,31 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.3.1 — Fixed remaining block/building overlaps in raster-mode presets (current)
+## v0.4.0 — Procedural sky + facade/terrain material detail for higher-quality rendering (current)
+
+First rendering-quality pass (materials only - no new generator logic).
+Every `generate_terrain` call now sets up a real Nishita procedural sky
+world (`materials/world_mat.py`) instead of a flat background color, so
+renders get physically-based sky gradient, sun, and ambient lighting for
+free; night mode dips the same sky's sun below the horizon rather than
+swapping to a separate flat-color night world. The city facade material
+mixes in an Object-space noise "grain" (stable per building, not flickering
+with world position) on top of the flat per-facade color, plus a matching
+Bump for micro-surface detail - and the terrain material got the same
+treatment (speckle noise breaking up the flat height-band colors, finer
+noise driving its own bump). All purely procedural shading tricks - no
+image textures, no extra geometry/subdivision - consistent with the
+addon's no-baked-assets approach everywhere else.
+
+**Kleinstadt, seed 8 — rendered, raytracing on:**
+![Kleinstadt render](docs/progression/v0.4.0-kleinstadt-render.png)
+
+**Live Blender session — actual screenshot, grain clearly visible on facades:**
+![Blender screenshot](docs/progression/v0.4.0-blender-screenshot.png)
+
+---
+
+## v0.3.1 — Fixed remaining block/building overlaps in raster-mode presets
 
 A live-session screenshot on Metropole showed buildings visibly overlapping
 each other - a bug the v0.3.0 prop/building overlap fix didn't cover, since
