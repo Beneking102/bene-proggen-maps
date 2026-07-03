@@ -176,7 +176,8 @@ class PROCGEN_OT_generate_city(bpy.types.Operator):
                                              parent_collection=_root_collection())
             _assign_city_material(result["building_objects"])
 
-        all_objects = result["street_objects"] + result["building_objects"] + result["prop_objects"]
+        all_objects = (result["street_objects"] + result["building_objects"]
+                       + result["building_extra_objects"] + result["prop_objects"])
         _write_stats(context.scene, profiler, all_objects)
         _switch_viewport_to_material_preview(context)
         self.report({'INFO'}, f"City generated: {len(result['building_objects'])} buildings, "

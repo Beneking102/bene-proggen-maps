@@ -19,11 +19,20 @@ _COLORS = {
     "car": (0.32, 0.42, 0.55, 1.0),
     "sign_pole": (0.20, 0.20, 0.20, 1.0),
     "sign_board": (0.90, 0.90, 0.85, 1.0),
+    "rooftop_unit": (0.55, 0.55, 0.58, 1.0),
+    "furniture_wood": (0.45, 0.30, 0.18, 1.0),
+    "furniture_soft": (0.55, 0.20, 0.22, 1.0),
+    "furniture_metal": (0.5, 0.5, 0.52, 1.0),
+    "furniture_crate": (0.62, 0.48, 0.30, 1.0),
+    "interior_floor": (0.55, 0.48, 0.40, 1.0),
+    "interior_ceiling": (0.85, 0.84, 0.80, 1.0),
 }
 
 _ROUGHNESS_OVERRIDES = {
     "car": 0.35,
     "lamp_head": 0.4,
+    "furniture_metal": 0.3,
+    "interior_floor": 0.6,
 }
 
 

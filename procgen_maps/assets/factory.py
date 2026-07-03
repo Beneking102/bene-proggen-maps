@@ -90,6 +90,15 @@ _PART_MATERIALS_BY_KIND = {
     "bench": ("bench",),
     "car": ("car",),
     "sign": ("sign_pole", "sign_board"),
+    "rooftop_unit": ("rooftop_unit",),
+    "bed": ("furniture_soft",),
+    "table": ("furniture_wood",),
+    "chair": ("furniture_wood",),
+    "shelf": ("furniture_wood",),
+    "desk": ("furniture_wood",),
+    "counter": ("furniture_wood",),
+    "crate": ("furniture_crate",),
+    "machinery": ("furniture_metal",),
 }
 
 
@@ -135,6 +144,51 @@ def _build_primitive_mesh(name: str, params: dict):
                                          z_offset=params["pole_height"] / 2.0)))
         part_faces.append((1, _add_cube(bm, (params["board_width"], 0.04, params["board_height"]),
                                          z_offset=params["pole_height"])))
+
+    elif kind == "rooftop_unit":
+        part_faces.append((0, _add_cube(bm, (params["width"], params["depth"], params["height"]),
+                                         z_offset=params["height"] / 2.0)))
+
+    elif kind == "bed":
+        part_faces.append((0, _add_cube(bm, (params["width"], params["length"], params["height"] * 0.4),
+                                         z_offset=params["height"] * 0.2)))
+        part_faces.append((0, _add_cube(bm, (params["width"] * 0.9, params["length"] * 0.25, params["height"] * 0.3),
+                                         z_offset=params["height"] * 0.55, y_offset=-params["length"] * 0.35)))
+
+    elif kind == "table":
+        part_faces.append((0, _add_cube(bm, (params["width"], params["length"], 0.05),
+                                         z_offset=params["height"])))
+        part_faces.append((0, _add_cube(bm, (params["width"] * 0.08, params["length"] * 0.08, params["height"]),
+                                         z_offset=params["height"] / 2.0)))
+
+    elif kind == "chair":
+        part_faces.append((0, _add_cube(bm, (params["width"], params["depth"], params["height"] * 0.5),
+                                         z_offset=params["height"] * 0.25)))
+        part_faces.append((0, _add_cube(bm, (params["width"], params["depth"] * 0.12, params["height"] * 0.5),
+                                         z_offset=params["height"] * 0.75, y_offset=-params["depth"] * 0.44)))
+
+    elif kind == "shelf":
+        part_faces.append((0, _add_cube(bm, (params["width"], params["depth"], params["height"]),
+                                         z_offset=params["height"] / 2.0)))
+
+    elif kind == "desk":
+        part_faces.append((0, _add_cube(bm, (params["width"], params["depth"], 0.05), z_offset=params["height"])))
+        part_faces.append((0, _add_cube(bm, (params["width"] * 0.08, params["depth"] * 0.08, params["height"]),
+                                         z_offset=params["height"] / 2.0, y_offset=params["depth"] * 0.4)))
+
+    elif kind == "counter":
+        part_faces.append((0, _add_cube(bm, (params["width"], params["depth"], params["height"]),
+                                         z_offset=params["height"] / 2.0)))
+
+    elif kind == "crate":
+        part_faces.append((0, _add_cube(bm, (params["size"], params["size"], params["size"]),
+                                         z_offset=params["size"] / 2.0)))
+
+    elif kind == "machinery":
+        part_faces.append((0, _add_cube(bm, (params["width"], params["depth"], params["height"] * 0.7),
+                                         z_offset=params["height"] * 0.35)))
+        part_faces.append((0, _add_cone(bm, params["width"] * 0.25, params["width"] * 0.25, params["height"] * 0.4,
+                                         max(4, params["segments"] // 2), z_offset=params["height"] * 0.9)))
 
     else:
         part_faces.append((0, _add_cube(bm, (1.0, 1.0, 1.0), z_offset=0.5)))

@@ -30,7 +30,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     street_graph = streets.build_street_graph(city_layout.streets)
     building_plans = buildings.plan_buildings(city_layout.blocks, zone_by_block, preset, seed=seed)
     prop_placements = props.plan_props(street_graph, city_layout.blocks, zone_by_block, preset, seed=seed,
-                                        terrain_params=terrain_params)
+                                        terrain_params=terrain_params, building_plans=building_plans)
 
     if parent_collection is None:
         parent_collection = bpy.context.scene.collection
@@ -40,7 +40,8 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     props_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Props", root)
 
     street_objects = streets.build_street_meshes(street_graph, preset, terrain_params, collection=streets_coll)
-    building_objects = buildings.build_building_meshes(building_plans, terrain_params, collection=buildings_coll)
+    building_objects, building_extra_objects = buildings.build_building_meshes(
+        building_plans, terrain_params, collection=buildings_coll)
     prop_objects = props.build_props(prop_placements, collection=props_coll)
 
     return {
@@ -52,6 +53,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         "prop_placements": prop_placements,
         "street_objects": street_objects,
         "building_objects": building_objects,
+        "building_extra_objects": building_extra_objects,
         "prop_objects": prop_objects,
     }
 
@@ -71,10 +73,15 @@ def _remove_collection_recursive(collection):
     for child in list(collection.children):
         _remove_collection_recursive(child)
     for obj in list(collection.objects):
-        mesh = obj.data if obj.type == 'MESH' else None
+        data = obj.data
+        obj_type = obj.type
         bpy.data.objects.remove(obj, do_unlink=True)
-        if mesh is not None and mesh.users == 0:
-            bpy.data.meshes.remove(mesh)
+        if data is None or data.users > 0:
+            continue
+        if obj_type == 'MESH':
+            bpy.data.meshes.remove(data)
+        elif obj_type == 'LIGHT':
+            bpy.data.lights.remove(data)
     bpy.data.collections.remove(collection)
 
 

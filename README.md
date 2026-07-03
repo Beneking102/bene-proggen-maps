@@ -70,7 +70,8 @@ details.
 See `ARCHITECTURE.md` for the module layout, registration pattern, and the
 pure-Python/bpy split convention every generator follows - read it before
 sending a pull request. `DEPLOYMENT.md` and `OPTIMIZATION.md` cover running
-headless and performance tuning, respectively.
+headless and performance tuning, respectively. `PROGRESSION.md` tracks the
+project's visual history with screenshots/renders per version.
 
 ## License
 

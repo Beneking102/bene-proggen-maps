@@ -14,6 +14,7 @@ class SpatialHashGrid:
     def __init__(self, cell_size=5.0):
         self.cell_size = cell_size
         self._cells = {}
+        self._max_radius = 0.0
 
     def _cell_coord(self, x, y):
         return (math.floor(x / self.cell_size), math.floor(y / self.cell_size))
@@ -21,6 +22,14 @@ class SpatialHashGrid:
     def insert(self, item_id, x, y, radius=0.0):
         cell = self._cell_coord(x, y)
         self._cells.setdefault(cell, []).append((item_id, x, y, radius))
+        # A query's cell search span is derived from radius sums (see
+        # query_radius/has_collision below); it must grow with the largest
+        # item radius ever inserted; not just the query's own radius,
+        # otherwise a query point can sit many cells away from a big item's
+        # center cell yet still overlap it (e.g. registering whole building
+        # footprints as large bounding circles alongside small props) and
+        # the search would miss it entirely.
+        self._max_radius = max(self._max_radius, radius)
 
     def remove(self, item_id, x, y):
         cell = self._cell_coord(x, y)
@@ -32,7 +41,7 @@ class SpatialHashGrid:
     def query_radius(self, x, y, radius):
         """Return the ids of all items whose center lies within `radius` of (x, y)."""
         result = []
-        span = int(math.ceil(radius / self.cell_size)) + 1
+        span = int(math.ceil((radius + self._max_radius) / self.cell_size)) + 1
         cx0, cy0 = self._cell_coord(x, y)
         for cx in range(cx0 - span, cx0 + span + 1):
             for cy in range(cy0 - span, cy0 + span + 1):
@@ -43,7 +52,7 @@ class SpatialHashGrid:
 
     def has_collision(self, x, y, radius):
         """True if a circle of `radius` at (x, y) overlaps any existing item's own footprint radius."""
-        span = int(math.ceil((radius + self.cell_size) / self.cell_size)) + 1
+        span = int(math.ceil((radius + self._max_radius) / self.cell_size)) + 1
         cx0, cy0 = self._cell_coord(x, y)
         for cx in range(cx0 - span, cx0 + span + 1):
             for cy in range(cy0 - span, cy0 + span + 1):

@@ -1,16 +1,24 @@
 """Procedural building generation: 12 facade archetypes over block footprints.
 
 `plan_buildings` is pure Python: decides which blocks get a building, how
-tall, and which facade type, from a data table of facade parameters.
-`build_building_meshes` is the bpy build step: extrudes each footprint
-upward floor-by-floor with bmesh, splitting each floor's side faces into
-width_pitch-wide window columns and punching recessed windows into a
-frequency-controlled subset of them, then building a proper gable (not a
-single-point pyramid poke) for 'peaked' roof styles. The facade type,
+tall, and which facade type, from a data table of facade parameters, with
+per-building jitter on window frequency/pitch/floor height so buildings
+sharing a facade type don't look identical. `build_building_meshes` is the
+bpy build step: extrudes each footprint upward floor-by-floor with bmesh,
+splitting each floor's side faces into width_pitch-wide window columns and
+punching recessed windows into a frequency-controlled subset of them,
+carving a wide entrance recess on the ground floor's -Y-facing side, adding
+a rooftop utility unit on some flat-roofed buildings, and building a proper
+gable (not a single-point pyramid poke) for 'peaked' roof styles. It also
+builds a simple furnished ground-floor interior (see
+_build_ground_floor_interior) visible through the transmissive window glass
+(materials/city_mat.py's get_or_create_window_material). The facade type,
 material index, and per-building tint are stored as custom object
 properties so materials/city_mat.py can key a shared parametrized shader
 off them.
 """
+import dataclasses
+import math
 import random
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -18,6 +26,11 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 from .layout import Block
+
+_WINDOW_FREQUENCY_JITTER = 0.15
+_WIDTH_PITCH_JITTER = 0.15
+_FLOOR_HEIGHT_JITTER = 0.08
+_ROOFTOP_UNIT_CHANCE = 0.4
 
 BUILDINGS_PREFIX = "ProcgenMaps_Building"
 
@@ -73,9 +86,18 @@ def plan_buildings(blocks: List[Block], zone_by_block: Dict[int, str], preset, s
         pool = [f for f in FACADE_TYPES if zone in f.zone_pool] or list(FACADE_TYPES)
         facade = pool[rng.integers(0, len(pool))]
 
+        # Per-building jitter on the facade's own tuning so buildings sharing
+        # a facade type don't look like identical copies.
+        jittered_frequency = float(np.clip(
+            facade.window_frequency + rng.uniform(-_WINDOW_FREQUENCY_JITTER, _WINDOW_FREQUENCY_JITTER), 0.05, 1.0))
+        jittered_pitch = facade.width_pitch * float(rng.uniform(1 - _WIDTH_PITCH_JITTER, 1 + _WIDTH_PITCH_JITTER))
+        facade = dataclasses.replace(facade, window_frequency=jittered_frequency, width_pitch=jittered_pitch)
+
         min_h, max_h = preset.building_height_range
         height = rng.uniform(min_h, max_h)
         floors = max(1, round(height / preset.building_floor_height))
+        floor_height = preset.building_floor_height * float(
+            rng.uniform(1 - _FLOOR_HEIGHT_JITTER, 1 + _FLOOR_HEIGHT_JITTER))
 
         shrink = rng.uniform(0.75, 0.95)
         cx, cy = block.center
@@ -84,21 +106,33 @@ def plan_buildings(blocks: List[Block], zone_by_block: Dict[int, str], preset, s
         footprint = [(cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)]
         tint = float(rng.random())
 
-        plans.append(BuildingPlan(block.id, footprint, floors, preset.building_floor_height, facade, tint))
+        plans.append(BuildingPlan(block.id, footprint, floors, floor_height, facade, tint))
 
     return plans
 
 
 def build_building_meshes(plans: List[BuildingPlan], terrain_params=None, collection=None):
-    """Extrude each BuildingPlan's footprint into a mesh object. Returns the created objects."""
-    from .. import terrain as terrain_gen
+    """Extrude each BuildingPlan's footprint into a mesh object, plus an
+    optional rooftop unit and a furnished ground-floor interior.
 
-    created = []
+    Returns (building_objects, extra_objects): `building_objects` are the
+    actual building-shell meshes only (every one has the same 2 material
+    slots, safe for callers like ui/operators.py's _assign_city_material to
+    bulk-assign into slot 0); `extra_objects` are the rooftop units, interior
+    floor/ceiling slabs, interior lights, and furniture Empties - each of
+    those already carries its own material (or, for lights/Empties, none at
+    all), so mixing them into `building_objects` would break any caller that
+    assumes every entry there is a building mesh."""
+    from .. import terrain as terrain_gen
+    from ...assets import factory
+
+    building_objects = []
+    extra_objects = []
     for index, plan in enumerate(plans):
         base_z = 0.0
+        cx = sum(p[0] for p in plan.footprint) / len(plan.footprint)
+        cy = sum(p[1] for p in plan.footprint) / len(plan.footprint)
         if terrain_params is not None:
-            cx = sum(p[0] for p in plan.footprint) / len(plan.footprint)
-            cy = sum(p[1] for p in plan.footprint) / len(plan.footprint)
             base_z = terrain_gen.sample_world_height(cx, cy, terrain_params)
 
         obj = _build_single_building(f"{BUILDINGS_PREFIX}_{index}", plan, base_z)
@@ -108,8 +142,18 @@ def build_building_meshes(plans: List[BuildingPlan], terrain_params=None, collec
         obj["procgen_maps_block_id"] = plan.block_id
         if collection is not None:
             collection.objects.link(obj)
-        created.append(obj)
-    return created
+        building_objects.append(obj)
+
+        rng = random.Random(hash((plan.block_id, "detail")) & 0xFFFFFFFF)
+        if plan.facade.roof_style == "flat" and plan.floors >= 2 and rng.random() < _ROOFTOP_UNIT_CHANCE:
+            roof_z = base_z + plan.floors * plan.floor_height
+            unit = factory.spawn("rooftop_unit", (cx + rng.uniform(-1.0, 1.0), cy + rng.uniform(-1.0, 1.0), roof_z),
+                                  rotation_z=rng.uniform(0, math.tau), collection=collection)
+            extra_objects.append(unit)
+
+        extra_objects.extend(_build_ground_floor_interior(plan, base_z, index, collection))
+
+    return building_objects, extra_objects
 
 
 def _build_single_building(name, plan: BuildingPlan, base_z: float):
@@ -122,7 +166,7 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
     bm.faces.ensure_lookup_table()
 
     top_face = base_face
-    for _floor in range(plan.floors):
+    for floor_index in range(plan.floors):
         # extrude_face_region's own "geom" return only ever reports the
         # single moved top face, never the newly created side faces (a real
         # bmesh quirk, confirmed empirically) - a before/after set diff over
@@ -142,6 +186,16 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
         # largest near-horizontal face - is by area, not list order.
         top_candidates = [f for f in new_faces if abs(f.normal.z) > 0.9]
         top_face = max(top_candidates, key=lambda f: f.calc_area()) if top_candidates else new_faces[-1]
+
+        if floor_index == 0:
+            side_faces = [f for f in new_faces if abs(f.normal.z) < 0.1]
+            entrance_face = min(side_faces, key=lambda f: f.calc_center_median().y) if side_faces else None
+            for face in side_faces:
+                if face is entrance_face:
+                    _add_entrance(bm, face)
+                elif plan.facade.window_frequency > 0:
+                    _add_window_row(bm, face, plan.facade)
+            continue
 
         if plan.facade.window_frequency > 0:
             side_faces = [f for f in new_faces if abs(f.normal.z) < 0.1]
@@ -175,6 +229,18 @@ def _horizontal_edges(face):
     vertical column cuts across the face, as opposed to the two edges that
     run vertically between floors."""
     return [edge for edge in face.edges if abs(edge.verts[0].co.z - edge.verts[1].co.z) < 1e-4]
+
+
+def _add_entrance(bm, face):
+    """Ground-floor entrance: one wide recessed glass frontage instead of the
+    regular window grid, on the side face facing -Y (an arbitrary but
+    consistent "front" convention, since axis-aligned footprints have no
+    inherent facing direction)."""
+    import bmesh
+
+    thickness = min(0.5, face.calc_area() ** 0.5 * 0.18)
+    bmesh.ops.inset_individual(bm, faces=[face], thickness=thickness, depth=-0.15)
+    face.material_index = 1
 
 
 def _add_window_row(bm, face, facade: "FacadeType"):
@@ -247,3 +313,73 @@ def _build_gable_roof(bm, top_face, footprint):
     bm.faces.new((v2, v3, ridge_b, ridge_a))
     bm.faces.new((v1, v2, ridge_a))
     bm.faces.new((v3, v0, ridge_b))
+
+
+_INTERIOR_WALL_MARGIN = 0.3     # meters inset from the exterior shell
+_INTERIOR_FURNITURE_SLOTS = ((-0.5, -0.5), (0.5, 0.5), (0.5, -0.5), (-0.5, 0.5))
+
+
+def _build_ground_floor_interior(plan: BuildingPlan, base_z: float, index: int, collection):
+    """Build a simple furnished ground-floor room: a floor slab, a ceiling
+    slab, a warm interior point light, and 2-3 facade-appropriate furniture
+    pieces (assets/library.py's FURNITURE_BY_FACADE) - visible from outside
+    through the transmissive window/entrance glass. Upper floors are left as
+    shell-only for performance (a real ceiling-to-ceiling interior per floor
+    on a 30-story Metropole tower would add tens of thousands of objects for
+    almost no visible payoff at normal camera distances)."""
+    import bpy
+
+    from ...assets import factory, library
+    from ...materials import prop_mat
+
+    min_x = min(p[0] for p in plan.footprint)
+    max_x = max(p[0] for p in plan.footprint)
+    min_y = min(p[1] for p in plan.footprint)
+    max_y = max(p[1] for p in plan.footprint)
+    cx, cy = (min_x + max_x) / 2.0, (min_y + max_y) / 2.0
+    half_w = (max_x - min_x) / 2.0 - _INTERIOR_WALL_MARGIN
+    half_h = (max_y - min_y) / 2.0 - _INTERIOR_WALL_MARGIN
+    if half_w <= 0.6 or half_h <= 0.6:
+        return []
+
+    floor_z = base_z + 0.05
+    ceiling_z = base_z + plan.floor_height - 0.15
+
+    floor_obj = _build_flat_quad(f"{BUILDINGS_PREFIX}_{index}_InteriorFloor", cx, cy, half_w, half_h, floor_z,
+                                  prop_mat.get_or_create_prop_material("interior_floor"))
+    ceiling_obj = _build_flat_quad(f"{BUILDINGS_PREFIX}_{index}_InteriorCeiling", cx, cy, half_w, half_h, ceiling_z,
+                                   prop_mat.get_or_create_prop_material("interior_ceiling"))
+
+    light_data = bpy.data.lights.new(f"{BUILDINGS_PREFIX}_{index}_InteriorLight", type='POINT')
+    light_data.energy = 20.0
+    light_data.color = (1.0, 0.92, 0.75)
+    light_obj = bpy.data.objects.new(f"{BUILDINGS_PREFIX}_{index}_InteriorLight", light_data)
+    light_obj.location = (cx, cy, base_z + plan.floor_height * 0.7)
+
+    created = [floor_obj, ceiling_obj, light_obj]
+    if collection is not None:
+        for obj in created:
+            collection.objects.link(obj)
+
+    rng = random.Random(hash((plan.block_id, "furniture")) & 0xFFFFFFFF)
+    furniture_ids = library.FURNITURE_BY_FACADE.get(plan.facade.key, [])
+    for slot_index, asset_id in enumerate(furniture_ids):
+        slot_x, slot_y = _INTERIOR_FURNITURE_SLOTS[slot_index % len(_INTERIOR_FURNITURE_SLOTS)]
+        x = cx + slot_x * half_w * 0.6
+        y = cy + slot_y * half_h * 0.6
+        empty = factory.spawn(asset_id, (x, y, floor_z), rotation_z=rng.uniform(0, math.tau), collection=collection)
+        created.append(empty)
+
+    return created
+
+
+def _build_flat_quad(name, cx, cy, half_w, half_h, z, material):
+    import bpy
+
+    verts = [(cx - half_w, cy - half_h, z), (cx + half_w, cy - half_h, z),
+             (cx + half_w, cy + half_h, z), (cx - half_w, cy + half_h, z)]
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
+    mesh.update(calc_edges=True)
+    mesh.materials.append(material)
+    return bpy.data.objects.new(name, mesh)

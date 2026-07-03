@@ -15,9 +15,29 @@ from procgen_maps.generators.dungeon import DungeonParams, generate_dungeon
 from procgen_maps.generators.terrain import TerrainParams, generate_heightmap, sample_world_height
 from procgen_maps.utils.math_helpers import clamp, lerp, remap, smoothstep
 from procgen_maps.utils.noise import fbm, fbm_heightmap, value_noise_2d
+from procgen_maps.utils.spatial import SpatialHashGrid
 
 _KNOWN_ZONES = {"residential", "commercial", "industrial", "park"}
 _DUNGEON_SEEDS = (0, 1, 42)
+
+
+def test_spatial_hash_grid_detects_collision_with_large_registered_item():
+    # Regression test: a query point can sit many grid cells away from a
+    # large item's own center cell yet still be inside its radius (e.g.
+    # registering a whole building footprint as a large bounding circle
+    # alongside small props) - the search span has to grow with the
+    # largest radius ever inserted, not just the query's own radius.
+    grid = SpatialHashGrid(cell_size=5.0)
+    grid.insert("building", 0.0, 0.0, radius=20.0)
+    assert grid.has_collision(18.0, 0.0, radius=0.5)
+    assert not grid.has_collision(100.0, 0.0, radius=0.5)
+
+
+def test_spatial_hash_grid_no_collision_when_far_apart():
+    grid = SpatialHashGrid(cell_size=5.0)
+    grid.insert("a", 0.0, 0.0, radius=1.0)
+    assert not grid.has_collision(10.0, 10.0, radius=1.0)
+    assert grid.has_collision(1.5, 0.0, radius=1.0)
 
 
 def test_fbm_same_seed_is_deterministic():
@@ -130,9 +150,18 @@ def test_preset_pipeline(preset_key):
     for plan in plans:
         assert zone_by_block[plan.block_id] != "park"
 
-    placements = plan_props(graph, layout.blocks, zone_by_block, preset)
+    placements = plan_props(graph, layout.blocks, zone_by_block, preset, building_plans=plans)
     for placement in placements:
         assert placement.asset_id in ASSET_DEFS
+
+    for placement in placements:
+        px, py, _ = placement.location
+        for plan in plans:
+            cx = sum(p[0] for p in plan.footprint) / len(plan.footprint)
+            cy = sum(p[1] for p in plan.footprint) / len(plan.footprint)
+            building_radius = max(math.hypot(p[0] - cx, p[1] - cy) for p in plan.footprint)
+            assert math.hypot(px - cx, py - cy) >= building_radius, (
+                f"{placement.asset_id} at ({px}, {py}) overlaps a building's bounding circle")
 
 
 def test_generate_dungeon_produces_rooms():

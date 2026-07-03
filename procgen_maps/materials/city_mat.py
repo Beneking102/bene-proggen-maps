@@ -110,7 +110,14 @@ def get_or_create_city_material():
 def get_or_create_window_material():
     """The material assigned to recessed window-pane faces (mesh slot 1) -
     see generators/city/buildings.py's _add_window_row, which sets
-    face.material_index = 1 on the pane it carves."""
+    face.material_index = 1 on the pane it carves.
+
+    Transmission Weight = 1 makes this actual see-through glass (so the
+    generated building interiors - generators/city/buildings.py's
+    _build_ground_floor_interior - are visible from outside), rather than a
+    solid tinted panel. Requires EEVEE Next's raytracing (scene.eevee.
+    use_raytracing = True) to actually render as transparent - without it,
+    EEVEE falls back to treating it as opaque."""
     import bpy
 
     existing = bpy.data.materials.get(WINDOW_MATERIAL_NAME)
@@ -128,8 +135,10 @@ def get_or_create_window_material():
     output.location = (400, 0)
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
     bsdf.location = (100, 0)
-    bsdf.inputs["Base Color"].default_value = (0.10, 0.16, 0.22, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.15
+    bsdf.inputs["Base Color"].default_value = (0.55, 0.65, 0.70, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.05
+    bsdf.inputs["Transmission Weight"].default_value = 0.92
+    bsdf.inputs["IOR"].default_value = 1.45
     bsdf.inputs["Emission Color"].default_value = (1.0, 0.85, 0.5, 1.0)
     links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
@@ -154,7 +163,15 @@ def _configure_facade_ramp(color_ramp):
 
 
 def set_night_mode(enabled: bool):
-    """Toggle the window material's emissive glow on/off."""
+    """Toggle the window material's emissive glow on/off.
+
+    Deliberately modest (0.25, not 1.0): this material is shared by every
+    window on every floor, including upper floors that have no modeled
+    interior behind them, so it needs *some* emission for those to read as
+    "lit" at night - but at full strength it blows out the transmission
+    view of the real ground-floor interiors (generators/city/buildings.py's
+    _build_ground_floor_interior), which then defeats the point of having
+    built them."""
     import bpy
 
     mat = bpy.data.materials.get(WINDOW_MATERIAL_NAME)
@@ -162,4 +179,4 @@ def set_night_mode(enabled: bool):
         return
     node = mat.node_tree.nodes.get(NIGHT_MODE_NODE_NAME)
     if node is not None:
-        node.outputs[0].default_value = 1.0 if enabled else 0.0
+        node.outputs[0].default_value = 0.25 if enabled else 0.0

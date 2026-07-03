@@ -13,6 +13,7 @@ from typing import Dict, List, Tuple
 from ...assets import library
 from ...utils.spatial import SpatialHashGrid
 from .. import terrain as terrain_gen
+from .buildings import BuildingPlan
 from .layout import Block
 from .streets import StreetGraph
 
@@ -34,18 +35,30 @@ class PropPlacement:
 
 
 def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int, str],
-                preset, seed=None, terrain_params=None) -> List[PropPlacement]:
+                preset, seed=None, terrain_params=None, building_plans: List[BuildingPlan] = None) -> List[PropPlacement]:
     """Compute collision-free placement points for all prop categories.
 
     If `terrain_params` is given, each prop's z is sampled from the same
     noise field as the terrain mesh/streets/buildings (see
     generators/terrain.py), so props sit on the ground instead of floating
-    above or getting buried under sloped terrain."""
+    above or getting buried under sloped terrain.
+
+    If `building_plans` is given, each building's footprint is pre-registered
+    in the collision grid (as its bounding circle - a conservative
+    approximation, since footprints are rectangles) before any prop is
+    placed, so lamps/trees/benches/signs never spawn inside or clipping a
+    building."""
     rng = random.Random(preset.seed if seed is None else seed)
     grid = SpatialHashGrid(cell_size=5.0)
     placements: List[PropPlacement] = []
     density = max(preset.prop_density, 0.05)
     tree_ids = library.tree_asset_ids()
+
+    for index, plan in enumerate(building_plans or []):
+        cx = sum(p[0] for p in plan.footprint) / len(plan.footprint)
+        cy = sum(p[1] for p in plan.footprint) / len(plan.footprint)
+        radius = max(math.hypot(p[0] - cx, p[1] - cy) for p in plan.footprint)
+        grid.insert(f"building_{index}", cx, cy, radius)
 
     def height_at(x, y):
         if terrain_params is None:
