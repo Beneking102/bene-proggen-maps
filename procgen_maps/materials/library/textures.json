@@ -1,0 +1,19 @@
+{
+  "terrain_material": "ProcgenMaps_Terrain",
+  "city_material": "ProcgenMaps_CityFacade",
+  "facade_palette": [
+    {"facade": "glass_tower", "material_index": 0, "base_color": [0.55, 0.75, 0.85, 1.0]},
+    {"facade": "office_block", "material_index": 1, "base_color": [0.65, 0.65, 0.68, 1.0]},
+    {"facade": "brick_commercial", "material_index": 2, "base_color": [0.55, 0.35, 0.28, 1.0]},
+    {"facade": "apartment_slab", "material_index": 3, "base_color": [0.75, 0.72, 0.65, 1.0]},
+    {"facade": "apartment_tower", "material_index": 4, "base_color": [0.70, 0.68, 0.60, 1.0]},
+    {"facade": "townhouse", "material_index": 5, "base_color": [0.80, 0.60, 0.45, 1.0]},
+    {"facade": "cottage", "material_index": 6, "base_color": [0.85, 0.75, 0.55, 1.0]},
+    {"facade": "shopfront", "material_index": 7, "base_color": [0.90, 0.85, 0.30, 1.0]},
+    {"facade": "warehouse", "material_index": 8, "base_color": [0.50, 0.50, 0.45, 1.0]},
+    {"facade": "factory_hall", "material_index": 9, "base_color": [0.45, 0.45, 0.42, 1.0]},
+    {"facade": "industrial_tower", "material_index": 10, "base_color": [0.40, 0.40, 0.40, 1.0]},
+    {"facade": "mixed_use", "material_index": 11, "base_color": [0.60, 0.55, 0.70, 1.0]}
+  ],
+  "note": "Reference metadata only. The shader node graphs themselves are built procedurally by materials/terrain_mat.py and materials/city_mat.py at generation time; this file exists so the palette can be reviewed/tweaked without reading code."
+}

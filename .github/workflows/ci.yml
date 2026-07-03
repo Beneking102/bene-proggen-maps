@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    name: pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install numpy pytest
+
+      - run: pytest procgen_maps/tests/test_generators.py procgen_maps/tests/test_materials.py procgen_maps/tests/test_exporters.py -v
+
+  blender-smoke:
+    name: blender-smoke
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download portable Blender 4.5 LTS
+        run: |
+          curl -L -o blender.tar.xz https://download.blender.org/release/Blender4.5/blender-4.5.11-linux-x64.tar.xz
+          mkdir blender
+          tar -xf blender.tar.xz -C blender --strip-components=1
+
+      - name: Run Blender smoke tests
+        run: ./blender/blender --background --factory-startup --python procgen_maps/tests/blender_integration/run_smoke_tests.py

@@ -1,0 +1,157 @@
+"""Pure-Python tests for noise, math helpers, terrain, city and dungeon generators."""
+import math
+
+import numpy as np
+import pytest
+
+from procgen_maps.assets.library import ASSET_DEFS
+from procgen_maps.config.presets import PRESETS
+from procgen_maps.generators.city.buildings import plan_buildings
+from procgen_maps.generators.city.layout import generate_layout
+from procgen_maps.generators.city.props import plan_props
+from procgen_maps.generators.city.streets import build_street_graph
+from procgen_maps.generators.city.zones import classify_zones
+from procgen_maps.generators.dungeon import DungeonParams, generate_dungeon
+from procgen_maps.generators.terrain import TerrainParams, generate_heightmap, sample_world_height
+from procgen_maps.utils.math_helpers import clamp, lerp, remap, smoothstep
+from procgen_maps.utils.noise import fbm, fbm_heightmap, value_noise_2d
+
+_KNOWN_ZONES = {"residential", "commercial", "industrial", "park"}
+_DUNGEON_SEEDS = (0, 1, 42)
+
+
+def test_fbm_same_seed_is_deterministic():
+    coords = np.linspace(-10.0, 10.0, 40)
+    xs, ys = np.meshgrid(coords, coords)
+    a = fbm(xs, ys, seed=5)
+    b = fbm(xs, ys, seed=5)
+    assert np.array_equal(a, b)
+
+
+def test_fbm_different_seed_differs():
+    coords = np.linspace(-10.0, 10.0, 40)
+    xs, ys = np.meshgrid(coords, coords)
+    a = fbm(xs, ys, seed=5)
+    b = fbm(xs, ys, seed=6)
+    assert not np.array_equal(a, b)
+
+
+def test_fbm_stays_in_unit_range():
+    coords = np.linspace(-50.0, 50.0, 64)
+    xs, ys = np.meshgrid(coords, coords)
+    values = fbm(xs, ys, seed=3)
+    assert np.all(values >= 0.0)
+    assert np.all(values <= 1.0)
+
+
+def test_fbm_heightmap_shape_and_range():
+    heightmap = fbm_heightmap(48, 300.0, seed=1)
+    assert heightmap.shape == (48, 48)
+    assert np.all(heightmap >= 0.0)
+    assert np.all(heightmap <= 1.0)
+
+
+def test_fbm_heightmap_determinism_and_seed_sensitivity():
+    a = fbm_heightmap(32, 200.0, seed=9)
+    b = fbm_heightmap(32, 200.0, seed=9)
+    c = fbm_heightmap(32, 200.0, seed=10)
+    assert np.array_equal(a, b)
+    assert not np.array_equal(a, c)
+
+
+def test_value_noise_2d_deterministic_and_bounded():
+    a = value_noise_2d(3.7, -2.1, seed=4)
+    b = value_noise_2d(3.7, -2.1, seed=4)
+    c = value_noise_2d(3.7, -2.1, seed=5)
+    assert a == b
+    assert a != c
+    assert 0.0 <= a <= 1.0
+
+
+def test_lerp():
+    assert lerp(0.0, 10.0, 0.5) == 5.0
+    assert lerp(2.0, 4.0, 0.0) == 2.0
+    assert lerp(2.0, 4.0, 1.0) == 4.0
+
+
+def test_clamp():
+    assert clamp(5, 0, 10) == 5
+    assert clamp(-5, 0, 10) == 0
+    assert clamp(15, 0, 10) == 10
+
+
+def test_remap():
+    assert remap(5.0, 0.0, 10.0, 0.0, 100.0) == 50.0
+    assert remap(0.0, 0.0, 10.0, -1.0, 1.0) == -1.0
+    assert remap(3.0, 5.0, 5.0, 0.0, 1.0) == 0.0
+
+
+def test_smoothstep():
+    assert smoothstep(0.0, 1.0, 0.5) == 0.5
+    assert smoothstep(0.0, 1.0, -1.0) == 0.0
+    assert smoothstep(0.0, 1.0, 2.0) == 1.0
+    assert smoothstep(5.0, 5.0, 3.0) == 0.0
+    assert smoothstep(5.0, 5.0, 7.0) == 1.0
+
+
+def test_heightmap_matches_sample_world_height():
+    params = TerrainParams(resolution=33, world_size=200.0, seed=5)
+    heights = generate_heightmap(params)
+    half = params.world_size / 2.0
+    coords = np.linspace(-half, half, params.resolution)
+
+    for row, col in ((0, 0), (16, 16), (32, 0), (10, 27)):
+        x, y = coords[col], coords[row]
+        expected = heights[row][col]
+        actual = sample_world_height(x, y, params)
+        assert actual == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("preset_key", sorted(PRESETS))
+def test_preset_pipeline(preset_key):
+    preset = PRESETS[preset_key]
+
+    layout = generate_layout(preset)
+    assert len(layout.blocks) >= 1
+
+    graph = build_street_graph(layout.streets)
+    assert len(graph.nodes) > 0
+    assert len(graph.edges) > 0
+    for a, b, street_class in graph.edges:
+        assert 0 <= a < len(graph.nodes)
+        assert 0 <= b < len(graph.nodes)
+        assert street_class in ("arterial", "local")
+
+    zone_by_block = classify_zones(layout.blocks, preset)
+    assert set(zone_by_block) == {block.id for block in layout.blocks}
+    assert all(zone in _KNOWN_ZONES for zone in zone_by_block.values())
+
+    plans = plan_buildings(layout.blocks, zone_by_block, preset)
+    for plan in plans:
+        assert zone_by_block[plan.block_id] != "park"
+
+    placements = plan_props(graph, layout.blocks, zone_by_block, preset)
+    for placement in placements:
+        assert placement.asset_id in ASSET_DEFS
+
+
+def test_generate_dungeon_produces_rooms():
+    for seed in _DUNGEON_SEEDS:
+        layout = generate_dungeon(DungeonParams(seed=seed))
+        assert len(layout.rooms) >= 1
+
+
+def test_generate_dungeon_corridor_endpoints_are_finite():
+    for seed in _DUNGEON_SEEDS:
+        layout = generate_dungeon(DungeonParams(seed=seed))
+        for corridor in layout.corridors:
+            assert math.isfinite(corridor.start[0])
+            assert math.isfinite(corridor.start[1])
+            assert math.isfinite(corridor.end[0])
+            assert math.isfinite(corridor.end[1])
+
+
+def test_generate_dungeon_is_deterministic():
+    layout_a = generate_dungeon(DungeonParams(seed=3))
+    layout_b = generate_dungeon(DungeonParams(seed=3))
+    assert len(layout_a.rooms) == len(layout_b.rooms)

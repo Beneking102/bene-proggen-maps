@@ -1,0 +1,22 @@
+{
+  "lod_levels": ["high", "medium", "low"],
+  "assets": [
+    {"asset_id": "tree_01", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_02", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_03", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_04", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_05", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_06", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_07", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_08", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_09", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_10", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_11", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "tree_12", "category": "tree", "footprint_radius": 1.2},
+    {"asset_id": "street_lamp", "category": "lamp", "footprint_radius": 0.4},
+    {"asset_id": "bench", "category": "bench", "footprint_radius": 0.9},
+    {"asset_id": "parked_car", "category": "car", "footprint_radius": 2.4},
+    {"asset_id": "sign", "category": "sign", "footprint_radius": 0.5}
+  ],
+  "note": "Geometry for these entries is generated procedurally by assets/factory.py (placeholder primitives). This file exists as a stable metadata reference for tooling/exporters; it is not currently read by factory.py at runtime - the canonical source of truth is assets/library.py."
+}

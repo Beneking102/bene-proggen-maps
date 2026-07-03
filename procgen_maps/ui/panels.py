@@ -1,0 +1,84 @@
+"""N-panel UI: preset picker, toggles, generate/export buttons, profiler readout."""
+import bpy
+
+from ..utils._registry import register_classes, unregister_classes
+
+_CATEGORY = "Procgen Maps"
+
+
+class PROCGEN_PT_main_panel(bpy.types.Panel):
+    bl_label = "Procgen Maps"
+    bl_idname = "PROCGEN_PT_main_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CATEGORY
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.procgen_maps
+
+        layout.prop(settings, "preset")
+        layout.prop(settings, "seed")
+
+        col = layout.column(align=True)
+        col.prop(settings, "use_terrain")
+        col.prop(settings, "enable_parks")
+        col.prop(settings, "enable_commercial")
+        col.prop(settings, "enable_cars")
+
+        layout.separator()
+        layout.operator("procgen_maps.generate_terrain")
+        layout.operator("procgen_maps.generate_city")
+        layout.operator("procgen_maps.generate_dungeon")
+
+        layout.separator()
+        layout.prop(settings, "night_mode", toggle=True)
+
+
+class PROCGEN_PT_export_panel(bpy.types.Panel):
+    bl_label = "Export"
+    bl_idname = "PROCGEN_PT_export_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CATEGORY
+    bl_parent_id = "PROCGEN_PT_main_panel"
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.procgen_maps
+        layout.prop(settings, "export_directory")
+        col = layout.column(align=True)
+        col.operator("procgen_maps.export_gltf")
+        col.operator("procgen_maps.export_fbx")
+        col.operator("procgen_maps.export_usdz")
+        col.operator("procgen_maps.export_svg")
+        col.operator("procgen_maps.export_json")
+
+
+class PROCGEN_PT_profiler_panel(bpy.types.Panel):
+    bl_label = "Profiler"
+    bl_idname = "PROCGEN_PT_profiler_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CATEGORY
+    bl_parent_id = "PROCGEN_PT_main_panel"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.procgen_maps
+        layout.label(text=f"Objects: {settings.stat_objects}")
+        layout.label(text=f"Vertices: {settings.stat_vertices}")
+        layout.label(text=f"Faces: {settings.stat_faces}")
+        layout.label(text=f"Last generate: {settings.stat_generate_seconds:.2f}s")
+
+
+classes = (PROCGEN_PT_main_panel, PROCGEN_PT_export_panel, PROCGEN_PT_profiler_panel)
+
+
+def register():
+    register_classes(classes)
+
+
+def unregister():
+    unregister_classes(classes)
