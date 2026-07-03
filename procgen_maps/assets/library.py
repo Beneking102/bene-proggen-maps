@@ -143,6 +143,12 @@ FURNITURE_BY_FACADE: Dict[str, List[str]] = {
     "factory_hall": ["furniture_machinery", "furniture_crate"],
     "industrial_tower": ["furniture_machinery", "furniture_crate"],
     "mixed_use": ["furniture_desk", "furniture_chair", "furniture_shelf"],
+    # generators/city/special_buildings.py's unique building types
+    "supermarket": ["furniture_shelf", "furniture_shelf", "furniture_counter"],
+    "police_station": ["furniture_desk", "furniture_chair", "furniture_shelf"],
+    "hospital": ["furniture_bed", "furniture_desk", "furniture_chair"],
+    "fire_station": ["furniture_machinery", "furniture_crate"],
+    "school": ["furniture_desk", "furniture_chair", "furniture_shelf"],
 }
 
 

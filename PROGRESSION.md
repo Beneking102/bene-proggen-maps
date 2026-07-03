@@ -6,7 +6,51 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.5.0 — New feature: "Render Showcase Image" tool (current)
+## v0.6.0 — Special buildings: supermarket, police station, hospital, fire station, school (current)
+
+Five unique, zone-targeted building types beyond the 12 generic facades,
+placed by explicit selection logic (`generators/city/special_buildings.py`)
+rather than the random per-block facade pick `buildings.plan_buildings`
+uses: each city gets one police station, hospital, fire station and school
+(largest available block in an allowed zone), plus a supermarket every ~45
+blocks (so bigger cities get more than one). Reuses `buildings.BuildingPlan`/
+`FacadeType` directly - each special type is just a `FacadeType` with its
+own fixed floor count/height and an extended material_index (12-16 in
+`city_mat.py`'s facade color ramp) instead of a randomly rolled one, so the
+exact same shell/window/roof/interior mesh construction applies unchanged.
+`generate_city` now reserves each special building's block before handing
+the rest to `plan_buildings`, so a block never gets both.
+
+Every special building gets an illuminated sign - a real Blender Text
+object mounted on the entrance facade, not a texture, so it's readable at
+any render distance - plus, for hospitals specifically, a rooftop helipad
+(a flat disc + a raised "H" marking). Furniture catalog
+(`assets/library.py`) extended with per-type interior sets (hospital beds,
+police desks, supermarket shelving/counters, etc.) for the ground-floor
+interiors every building already gets.
+
+New pytest coverage in `test_generators.py`: reserved-block/plan bookkeeping
+is consistent, special buildings never land on park blocks or reuse a
+regular building's block, `min_blocks_required` correctly gates small
+cities out of types they're too small for, supermarket count scales with
+city size, planning is deterministic for a given seed, and every spec has a
+unique material index.
+
+**Kleinstadt, seed 7 — hospital close-up (sign + rooftop helipad), with the neighboring police station and school also in frame:**
+![Hospital closeup](docs/progression/v0.6.0-hospital-closeup.png)
+
+**Kleinstadt, seed 7 — supermarket close-up (two placed in this city, per the every-45-blocks scaling):**
+![Supermarket closeup](docs/progression/v0.6.0-supermarket-closeup.png)
+
+**Kleinstadt, seed 7 — full city overview:**
+![Kleinstadt overview](docs/progression/v0.6.0-kleinstadt-overview.png)
+
+**Live Blender session — actual screenshot, N-panel open:**
+![Blender screenshot](docs/progression/v0.6.0-blender-screenshot.png)
+
+---
+
+## v0.5.0 — New feature: "Render Showcase Image" tool
 
 Every render/screenshot in this document up to now came from a one-off
 Python script written by hand each time (bounding-box math, camera

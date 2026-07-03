@@ -20,6 +20,10 @@ and exports them to common interchange formats. Targets Blender 4.2+.
   commercial, apartment slab/tower, townhouse, cottage, shopfront, warehouse,
   factory hall, industrial tower, mixed use), extruded floor-by-floor with
   bmesh and driven by a shared parametrized facade material.
+- **5 special buildings** (supermarket, police station, hospital, fire
+  station, school), placed by explicit zone/size selection rather than the
+  random facade pick, each with an illuminated sign and, for hospitals, a
+  rooftop helipad (`procgen_maps/generators/city/special_buildings.py`).
 - **Separate BSP dungeon generator**, independent of the city/terrain
   pipeline - rooms and corridors from binary space partitioning.
 - **Procedural placeholder props**: 12 tree variants, a street lamp, a

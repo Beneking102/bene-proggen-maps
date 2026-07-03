@@ -7,8 +7,12 @@ import pytest
 from procgen_maps.assets.library import ASSET_DEFS
 from procgen_maps.config.presets import PRESETS
 from procgen_maps.generators.city.buildings import plan_buildings
-from procgen_maps.generators.city.layout import generate_layout
+from procgen_maps.generators.city.layout import Block, generate_layout
 from procgen_maps.generators.city.props import plan_props
+from procgen_maps.generators.city.special_buildings import (
+    SPECIAL_BUILDING_SPECS,
+    plan_special_buildings,
+)
 from procgen_maps.generators.city.streets import build_street_graph
 from procgen_maps.generators.city.zones import classify_zones
 from procgen_maps.generators.dungeon import DungeonParams, generate_dungeon
@@ -156,10 +160,18 @@ def test_preset_pipeline(preset_key):
     assert set(zone_by_block) == {block.id for block in layout.blocks}
     assert all(zone in _KNOWN_ZONES for zone in zone_by_block.values())
 
-    plans = plan_buildings(layout.blocks, zone_by_block, preset)
+    special_plans, reserved_block_ids = plan_special_buildings(layout.blocks, zone_by_block, preset)
+    for plan in special_plans:
+        assert zone_by_block[plan.block_id] != "park"
+    assert reserved_block_ids == {plan.block_id for plan in special_plans}
+
+    regular_blocks = [b for b in layout.blocks if b.id not in reserved_block_ids]
+    plans = plan_buildings(regular_blocks, zone_by_block, preset)
     for plan in plans:
         assert zone_by_block[plan.block_id] != "park"
+        assert plan.block_id not in reserved_block_ids
 
+    plans = plans + special_plans
     placements = plan_props(graph, layout.blocks, zone_by_block, preset, building_plans=plans)
     for placement in placements:
         assert placement.asset_id in ASSET_DEFS
@@ -172,6 +184,97 @@ def test_preset_pipeline(preset_key):
             building_radius = max(math.hypot(p[0] - cx, p[1] - cy) for p in plan.footprint)
             assert math.hypot(px - cx, py - cy) >= building_radius, (
                 f"{placement.asset_id} at ({px}, {py}) overlaps a building's bounding circle")
+
+
+@pytest.mark.parametrize("preset_key", sorted(PRESETS))
+def test_plan_special_buildings_reserved_blocks_match_plans(preset_key):
+    preset = PRESETS[preset_key]
+    layout = generate_layout(preset)
+    zone_by_block = classify_zones(layout.blocks, preset)
+
+    plans, reserved_block_ids = plan_special_buildings(layout.blocks, zone_by_block, preset)
+
+    assert reserved_block_ids == {plan.block_id for plan in plans}
+    # Every spec claims at most one block per city (count_formula 'one'), and
+    # even 'scaled' supermarket picks distinct, never-repeated blocks, so no
+    # block should be reserved by more than one plan.
+    assert len(reserved_block_ids) == len(plans)
+
+
+@pytest.mark.parametrize("preset_key", sorted(PRESETS))
+def test_plan_special_buildings_never_on_park_blocks(preset_key):
+    preset = PRESETS[preset_key]
+    layout = generate_layout(preset)
+    zone_by_block = classify_zones(layout.blocks, preset)
+
+    plans, _ = plan_special_buildings(layout.blocks, zone_by_block, preset)
+
+    for plan in plans:
+        assert zone_by_block[plan.block_id] != "park"
+
+
+@pytest.mark.parametrize("preset_key", sorted(PRESETS))
+def test_plan_special_buildings_does_not_reuse_regular_building_blocks(preset_key):
+    # Mirrors generators.city.__init__.generate_city's pipeline order: regular
+    # buildings must never be planned onto a block a special building reserved.
+    preset = PRESETS[preset_key]
+    layout = generate_layout(preset)
+    zone_by_block = classify_zones(layout.blocks, preset)
+
+    special_plans, reserved_block_ids = plan_special_buildings(layout.blocks, zone_by_block, preset)
+    regular_blocks = [b for b in layout.blocks if b.id not in reserved_block_ids]
+    regular_plans = plan_buildings(regular_blocks, zone_by_block, preset)
+
+    regular_block_ids = {plan.block_id for plan in regular_plans}
+    assert regular_block_ids.isdisjoint(reserved_block_ids)
+    # All preset city sizes (see config/presets.py) comfortably exceed every
+    # spec's min_blocks_required, so every special type should actually place
+    # (supermarket may place more than once - see the scaling test below).
+    assert {plan.facade.key for plan in special_plans} == {spec.facade.key for spec in SPECIAL_BUILDING_SPECS}
+
+
+def test_plan_special_buildings_supermarket_count_scales_with_city_size():
+    for preset_key in ("METROPOLE", "INDUSTRIAL"):
+        preset = PRESETS[preset_key]
+        layout = generate_layout(preset)
+        zone_by_block = classify_zones(layout.blocks, preset)
+
+        plans, _ = plan_special_buildings(layout.blocks, zone_by_block, preset)
+        supermarket_count = sum(1 for plan in plans if plan.facade.key == "supermarket")
+
+        assert supermarket_count == max(1, len(layout.blocks) // 45)
+
+
+def test_plan_special_buildings_skips_types_below_min_blocks_required():
+    preset = PRESETS["DORF"]
+    tiny_blocks = [Block(id=i, center=(float(i) * 5.0, 0.0), half_size=(2.0, 2.0)) for i in range(3)]
+    zone_by_block = {block.id: "commercial" for block in tiny_blocks}
+
+    # Every spec's min_blocks_required (smallest is 6) exceeds this 3-block
+    # city, so nothing should be placed at all.
+    plans, reserved_block_ids = plan_special_buildings(tiny_blocks, zone_by_block, preset)
+
+    assert plans == []
+    assert reserved_block_ids == set()
+
+
+def test_plan_special_buildings_is_deterministic_for_a_given_seed():
+    preset = PRESETS["KLEINSTADT"]
+    layout = generate_layout(preset)
+    zone_by_block = classify_zones(layout.blocks, preset)
+
+    plans_a, reserved_a = plan_special_buildings(layout.blocks, zone_by_block, preset, seed=7)
+    plans_b, reserved_b = plan_special_buildings(layout.blocks, zone_by_block, preset, seed=7)
+
+    assert reserved_a == reserved_b
+    assert [p.block_id for p in plans_a] == [p.block_id for p in plans_b]
+    assert [p.tint for p in plans_a] == [p.tint for p in plans_b]
+
+
+def test_special_building_specs_have_unique_material_indices():
+    indices = [spec.facade.material_index for spec in SPECIAL_BUILDING_SPECS]
+    assert len(indices) == len(set(indices))
+    assert all(index >= 12 for index in indices)
 
 
 def test_generate_dungeon_produces_rooms():

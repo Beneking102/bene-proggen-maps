@@ -4,7 +4,7 @@ No bpy.types classes live in this package (operators live in ui/operators.py);
 register()/unregister() are no-ops kept for the subpackage registration
 contract used by procgen_maps/generators/__init__.py.
 """
-from . import buildings, layout, props, streets, zones  # noqa: F401  (re-exported for callers)
+from . import buildings, layout, props, special_buildings, streets, zones  # noqa: F401  (re-exported for callers)
 
 CITY_ROOT_COLLECTION_NAME = "ProcgenMaps_City"
 
@@ -28,9 +28,15 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     city_layout = layout.generate_layout(preset, seed=seed)
     zone_by_block = zones.classify_zones(city_layout.blocks, preset, seed=seed)
     street_graph = streets.build_street_graph(city_layout.streets)
-    building_plans = buildings.plan_buildings(city_layout.blocks, zone_by_block, preset, seed=seed)
+
+    special_plans, reserved_block_ids = special_buildings.plan_special_buildings(
+        city_layout.blocks, zone_by_block, preset, seed=seed)
+    regular_blocks = [b for b in city_layout.blocks if b.id not in reserved_block_ids]
+    building_plans = buildings.plan_buildings(regular_blocks, zone_by_block, preset, seed=seed)
+
     prop_placements = props.plan_props(street_graph, city_layout.blocks, zone_by_block, preset, seed=seed,
-                                        terrain_params=terrain_params, building_plans=building_plans)
+                                        terrain_params=terrain_params,
+                                        building_plans=building_plans + special_plans)
 
     if parent_collection is None:
         parent_collection = bpy.context.scene.collection
@@ -42,6 +48,8 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     street_objects = streets.build_street_meshes(street_graph, preset, terrain_params, collection=streets_coll)
     building_objects, building_extra_objects = buildings.build_building_meshes(
         building_plans, terrain_params, collection=buildings_coll)
+    special_objects, special_extra_objects = special_buildings.build_special_building_meshes(
+        special_plans, terrain_params, collection=buildings_coll)
     prop_objects = props.build_props(prop_placements, collection=props_coll)
 
     return {
@@ -50,10 +58,15 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         "zone_by_block": zone_by_block,
         "street_graph": street_graph,
         "building_plans": building_plans,
+        "special_building_plans": special_plans,
         "prop_placements": prop_placements,
         "street_objects": street_objects,
-        "building_objects": building_objects,
-        "building_extra_objects": building_extra_objects,
+        # Special buildings merged into the same keys as the 12 generic
+        # facades: they share the exact same mesh/material shape (see
+        # special_buildings.py), so every existing caller (material
+        # assignment, stats counting) already handles both without change.
+        "building_objects": building_objects + special_objects,
+        "building_extra_objects": building_extra_objects + special_extra_objects,
         "prop_objects": prop_objects,
     }
 
@@ -82,6 +95,8 @@ def _remove_collection_recursive(collection):
             bpy.data.meshes.remove(data)
         elif obj_type == 'LIGHT':
             bpy.data.lights.remove(data)
+        elif obj_type == 'FONT':
+            bpy.data.curves.remove(data)
     bpy.data.collections.remove(collection)
 
 

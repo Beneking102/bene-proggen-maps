@@ -40,6 +40,11 @@ _FACADE_COLORS = (
     (0.45, 0.45, 0.42, 1.0),  # factory_hall
     (0.40, 0.40, 0.40, 1.0),  # industrial_tower
     (0.60, 0.55, 0.70, 1.0),  # mixed_use
+    (0.85, 0.85, 0.90, 1.0),  # supermarket (neutral shell - the sign carries the branding color)
+    (0.75, 0.78, 0.85, 1.0),  # police_station
+    (0.92, 0.92, 0.90, 1.0),  # hospital
+    (0.42, 0.20, 0.18, 1.0),  # fire_station
+    (0.80, 0.72, 0.52, 1.0),  # school
 )
 
 
