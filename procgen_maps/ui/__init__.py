@@ -23,6 +23,18 @@ class ProcgenMapsSettings(bpy.types.PropertyGroup):
     export_directory: bpy.props.StringProperty(name="Export Directory", subtype='DIR_PATH',
                                                  default="//procgen_maps_export/")
 
+    showcase_angle: bpy.props.EnumProperty(
+        name="Angle",
+        items=(
+            ("overview", "Overview", "Wide, elevated three-quarter view of the whole generated area"),
+            ("close", "Close-up", "Zoomed in on one corner/building cluster"),
+            ("low", "Low Angle", "Low, more dramatic street-level-ish angle"),
+        ),
+        default="overview",
+    )
+    showcase_width: bpy.props.IntProperty(name="Width", default=1280, min=64, max=8192)
+    showcase_height: bpy.props.IntProperty(name="Height", default=800, min=64, max=8192)
+
     stat_objects: bpy.props.IntProperty(name="Objects", default=0)
     stat_vertices: bpy.props.IntProperty(name="Vertices", default=0)
     stat_faces: bpy.props.IntProperty(name="Faces", default=0)

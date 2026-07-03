@@ -25,13 +25,13 @@ bl_info = {
 
 
 def _submodules():
-    from . import assets, config, exporters, generators, materials, ui, utils
+    from . import assets, config, exporters, generators, materials, rendering, ui, utils
 
     # Dependency order: utils/config have no bpy.types classes; assets/
     # materials are generator dependencies; generators must exist before ui
-    # (operators call into generators); exporters last since ui/operators.py
-    # only imports them lazily, per-export.
-    return (utils, config, assets, materials, generators, exporters, ui)
+    # (operators call into generators); exporters/rendering last since
+    # ui/operators.py only imports them lazily, per-operator.
+    return (utils, config, assets, materials, generators, exporters, rendering, ui)
 
 
 def register():

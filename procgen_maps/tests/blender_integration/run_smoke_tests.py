@@ -102,6 +102,7 @@ def main():
         _run_stage("Export SVG", lambda: export_and_check("export_svg", "procgen_maps.svg"))
         _run_optional_export("Export FBX", lambda: export_and_check("export_fbx", "procgen_maps.fbx"))
         _run_optional_export("Export USDZ", lambda: export_and_check("export_usdz", "procgen_maps.usdz"))
+        _run_stage("Render showcase", lambda: export_and_check("render_showcase", "procgen_maps_showcase.png"))
 
     procgen_maps.unregister()
     _check("no leftover Scene.procgen_maps after unregister", not hasattr(bpy.types.Scene, "procgen_maps"))

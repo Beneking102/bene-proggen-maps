@@ -55,6 +55,24 @@ class PROCGEN_PT_export_panel(bpy.types.Panel):
         col.operator("procgen_maps.export_json")
 
 
+class PROCGEN_PT_showcase_panel(bpy.types.Panel):
+    bl_label = "Showcase Render"
+    bl_idname = "PROCGEN_PT_showcase_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CATEGORY
+    bl_parent_id = "PROCGEN_PT_main_panel"
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.procgen_maps
+        layout.prop(settings, "showcase_angle")
+        row = layout.row(align=True)
+        row.prop(settings, "showcase_width")
+        row.prop(settings, "showcase_height")
+        layout.operator("procgen_maps.render_showcase")
+
+
 class PROCGEN_PT_profiler_panel(bpy.types.Panel):
     bl_label = "Profiler"
     bl_idname = "PROCGEN_PT_profiler_panel"
@@ -73,7 +91,7 @@ class PROCGEN_PT_profiler_panel(bpy.types.Panel):
         layout.label(text=f"Last generate: {settings.stat_generate_seconds:.2f}s")
 
 
-classes = (PROCGEN_PT_main_panel, PROCGEN_PT_export_panel, PROCGEN_PT_profiler_panel)
+classes = (PROCGEN_PT_main_panel, PROCGEN_PT_export_panel, PROCGEN_PT_showcase_panel, PROCGEN_PT_profiler_panel)
 
 
 def register():

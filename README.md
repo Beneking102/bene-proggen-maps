@@ -30,7 +30,15 @@ and exports them to common interchange formats. Targets Blender 4.2+.
   placing thousands of props costs lightweight Empties, not thousands of
   independent meshes.
 - **Night mode**: emissive building windows plus real point lights at every
-  street lamp, toggled from the panel.
+  street lamp, toggled from the panel - also dips the procedural sky's sun
+  below the horizon.
+- **Procedural sky + material detail**: a Nishita sky world (no HDRI file
+  needed) plus noise-driven grain/bump on facade and terrain materials for
+  higher-quality renders without baked textures.
+- **Render Showcase Image**: one-click auto-framed render - computes a
+  camera placement from whatever's been generated (`procgen_maps/rendering/`),
+  sets up day/night sun position, enables raytracing for correct glass, and
+  renders straight to the export directory.
 - **Export** to glTF/GLB, FBX, USDZ, a top-down SVG map, and a JSON stats
   sidecar.
 - **N-panel UI** under `View3D > Sidebar > Procgen Maps`, with a profiler

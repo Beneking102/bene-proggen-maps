@@ -301,6 +301,36 @@ class PROCGEN_OT_export_json(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class PROCGEN_OT_render_showcase(bpy.types.Operator):
+    bl_idname = "procgen_maps.render_showcase"
+    bl_label = "Render Showcase Image"
+    bl_description = ("Auto-frame a camera on the generated content and render a high-quality "
+                       "still (procedural sky, raytraced glass/materials)")
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        from ..rendering import framing, showcase
+
+        root = bpy.data.collections.get(ROOT_COLLECTION_NAME)
+        if root is None:
+            self.report({'ERROR'}, "Nothing generated yet - generate terrain or a city first")
+            return {'CANCELLED'}
+
+        settings = context.scene.procgen_maps
+        bounds_min, bounds_max = showcase.collect_scene_bounds(root)
+        plan = framing.compute_framing(bounds_min, bounds_max, angle=settings.showcase_angle)
+
+        showcase.build_showcase_camera(plan)
+        showcase.ensure_showcase_sun(night_mode=settings.night_mode)
+        context.scene.camera = bpy.data.objects.get(showcase.CAMERA_NAME)
+
+        filepath = _resolve_export_path(context, "procgen_maps_showcase.png")
+        showcase.render_showcase(filepath, resolution=(settings.showcase_width, settings.showcase_height))
+
+        self.report({'INFO'}, f"Showcase render saved to {filepath}")
+        return {'FINISHED'}
+
+
 classes = (
     PROCGEN_OT_generate_terrain,
     PROCGEN_OT_generate_city,
@@ -310,6 +340,7 @@ classes = (
     PROCGEN_OT_export_usdz,
     PROCGEN_OT_export_svg,
     PROCGEN_OT_export_json,
+    PROCGEN_OT_render_showcase,
 )
 
 

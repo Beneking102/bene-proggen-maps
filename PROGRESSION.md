@@ -6,7 +6,32 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.4.0 — Procedural sky + facade/terrain material detail for higher-quality rendering (current)
+## v0.5.0 — New feature: "Render Showcase Image" tool (current)
+
+Every render/screenshot in this document up to now came from a one-off
+Python script written by hand each time (bounding-box math, camera
+placement, sun setup, EEVEE settings) - none of that lived in the addon
+itself. This turns it into a real, reusable feature: a new `rendering/`
+subsystem (`framing.py`, pure-Python bounding-box-to-camera-placement math,
+fully pytest-covered; `showcase.py`, the bpy build step that creates the
+camera/sun and configures+triggers the render) plus a **Render Showcase
+Image** button in a new N-panel section, with an angle dropdown (Overview /
+Close-up / Low Angle) and a resolution field. One click auto-frames a
+camera on whatever's been generated, sets up sun position for day/night,
+turns on raytracing for correct glass transmission, and renders straight to
+the export directory - no more hand-tuning a script per screenshot. This is
+meant to keep improving over future rounds (more angle presets, depth of
+field, compositor-based color grading, etc.).
+
+**Kleinstadt, seed 12 — produced by clicking the actual button (well, calling the same operator the button calls):**
+![Showcase render](docs/progression/v0.5.0-showcase-render.png)
+
+**Live Blender session, N-panel open (Procgen Maps tab visible in the sidebar):**
+![Blender screenshot](docs/progression/v0.5.0-blender-screenshot.png)
+
+---
+
+## v0.4.0 — Procedural sky + facade/terrain material detail for higher-quality rendering
 
 First rendering-quality pass (materials only - no new generator logic).
 Every `generate_terrain` call now sets up a real Nishita procedural sky
