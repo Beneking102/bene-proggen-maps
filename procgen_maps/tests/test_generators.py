@@ -134,6 +134,16 @@ def test_preset_pipeline(preset_key):
     layout = generate_layout(preset)
     assert len(layout.blocks) >= 1
 
+    # Regression: raster-mode blocks (Metropole, Industrial) are built from
+    # the axis-aligned bounding box of an irregular Voronoi-like cell, which
+    # can still overlap a neighbor's bbox even after the fill-factor shrink -
+    # generate_layout must resolve these before returning.
+    for i, block_a in enumerate(layout.blocks):
+        for block_b in layout.blocks[i + 1:]:
+            overlap_x = (block_a.half_size[0] + block_b.half_size[0]) - abs(block_a.center[0] - block_b.center[0])
+            overlap_y = (block_a.half_size[1] + block_b.half_size[1]) - abs(block_a.center[1] - block_b.center[1])
+            assert overlap_x <= 0 or overlap_y <= 0, f"blocks {block_a.id} and {block_b.id} overlap"
+
     graph = build_street_graph(layout.streets)
     assert len(graph.nodes) > 0
     assert len(graph.edges) > 0

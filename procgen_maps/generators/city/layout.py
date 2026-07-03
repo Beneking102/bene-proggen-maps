@@ -22,6 +22,7 @@ import numpy as np
 
 _FILL_FACTOR = 0.78       # fraction of available extent actually built on; remainder is street gap
 _ARTERIAL_EVERY_N = 3     # every Nth grid line / every Nth block is an arterial street
+_MIN_BLOCK_HALF_SIZE = 2.0  # meters; raster blocks shrunk smaller than this by overlap resolution are dropped
 
 
 @dataclass
@@ -148,8 +149,55 @@ def _generate_raster_layout(preset, seed) -> CityLayout:
         blocks.append(Block(id=seed_index, center=((min_x + max_x) / 2.0, (min_y + max_y) / 2.0),
                              half_size=(hw, hh)))
 
+    _resolve_block_overlaps(blocks)
+    # A block that needed heavy shrinking to resolve an overlap (see above)
+    # can end up as a sliver too small to read as a real building lot -
+    # drop it, same as the original too-small-to-bother check above.
+    blocks = [b for b in blocks if min(b.half_size) >= _MIN_BLOCK_HALF_SIZE]
+
     streets = _raster_street_segments(nearest, blocks, preset)
     return CityLayout(blocks=blocks, streets=streets, radius=radius)
+
+
+def _resolve_block_overlaps(blocks: List[Block], passes: int = 6, margin: float = 0.1) -> None:
+    """Shrink any pair of blocks whose rectangles still overlap, in place.
+
+    A raster-mode block's rectangle is the axis-aligned bounding box of every
+    grid cell nearest to its seed (see above), shrunk by _FILL_FACTOR - but
+    for non-convex or irregularly-shaped Voronoi-like cells (routine for
+    scattered seeds), that bounding box can still extend into a
+    neighboring seed's actual territory even after the shrink, so two
+    blocks can end up overlapping. Rather than trying to reconstruct the
+    true (possibly concave) cell polygon just to get a tighter initial
+    estimate, this resolves the *invariant* directly: for every pair that
+    still overlaps, shrink both along whichever axis has the smaller
+    overlap (the axis where a fix costs the least width) until their
+    projections on that axis no longer intersect - which, by the AABB
+    separating-axis test, guarantees the rectangles no longer overlap
+    regardless of the other axis. A few passes handle chains of blocks
+    that all touch each other settling into a mutually non-overlapping
+    arrangement."""
+    for _ in range(passes):
+        changed = False
+        for i in range(len(blocks)):
+            a = blocks[i]
+            for j in range(i + 1, len(blocks)):
+                b = blocks[j]
+                overlap_x = (a.half_size[0] + b.half_size[0]) - abs(a.center[0] - b.center[0])
+                overlap_y = (a.half_size[1] + b.half_size[1]) - abs(a.center[1] - b.center[1])
+                if overlap_x <= 0 or overlap_y <= 0:
+                    continue
+                changed = True
+                if overlap_x < overlap_y:
+                    shrink = overlap_x / 2.0 + margin
+                    a.half_size = (max(0.5, a.half_size[0] - shrink), a.half_size[1])
+                    b.half_size = (max(0.5, b.half_size[0] - shrink), b.half_size[1])
+                else:
+                    shrink = overlap_y / 2.0 + margin
+                    a.half_size = (a.half_size[0], max(0.5, a.half_size[1] - shrink))
+                    b.half_size = (b.half_size[0], max(0.5, b.half_size[1] - shrink))
+        if not changed:
+            return
 
 
 def _rect_exit_point(center, half_size, direction):

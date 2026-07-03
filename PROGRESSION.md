@@ -6,7 +6,39 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.3.0 — Detail pass, ground-floor interiors, overlap fix (current)
+## v0.3.1 — Fixed remaining block/building overlaps in raster-mode presets (current)
+
+A live-session screenshot on Metropole showed buildings visibly overlapping
+each other - a bug the v0.3.0 prop/building overlap fix didn't cover, since
+that fix only kept *props* out of buildings, not buildings out of each
+other. Root cause: raster-mode blocks (Metropole, Industrial) are built
+from the axis-aligned bounding box of an irregular Voronoi-like cell, and
+for non-convex or oddly-shaped cells that bbox can still extend into a
+neighboring seed's actual territory even after the existing fill-factor
+shrink - so two blocks (and the buildings placed on them) could overlap.
+Grid-mode presets (Dorf, Kleinstadt) were never affected. Measured 156
+overlapping block pairs / 41 overlapping buildings on Metropole and 37 / 11
+on Industrial before the fix.
+
+Rather than trying to reconstruct the true (possibly concave) cell polygon
+just for a tighter initial estimate, `generate_layout` now resolves the
+*invariant* directly: any pair of blocks whose rectangles still overlap
+gets shrunk along whichever axis has the smaller overlap until their
+projections on that axis no longer intersect, which by the AABB
+separating-axis test guarantees no overlap regardless of the other axis.
+A few passes settle chains of mutually-touching blocks. Blocks shrunk down
+to a sliver by this process are dropped. Verified 0 block and 0 building
+overlaps across all 4 presets, with a regression test added.
+
+**Metropole, seed 1 — rendered (raytracing enabled, no more transmission ghosting either):**
+![Metropole render](docs/progression/v0.3.1-metropole-render.png)
+
+**Live Blender session — actual screenshot:**
+![Blender screenshot](docs/progression/v0.3.1-blender-screenshot.png)
+
+---
+
+## v0.3.0 — Detail pass, ground-floor interiors, overlap fix
 
 Building facades got real per-instance variety (jittered window frequency/
 pitch/floor height so same-facade buildings stop looking identical), a
