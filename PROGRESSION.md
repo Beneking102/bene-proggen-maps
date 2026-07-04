@@ -6,7 +6,62 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.6.0 — Special buildings: supermarket, police station, hospital, fire station, school (current)
+## v0.7.0 — Street signage/traffic logic + a Lighting configuration panel (current)
+
+Two features this round. **Street signage** (`generators/city/signage.py`):
+deterministic, rule-based sign placement driven by the street graph's own
+intersection degree and street_class hierarchy, not a random density
+roll. A local approach at any real (3+-way) intersection gets a stop
+sign; an all-arterial intersection gets none (no traffic-light feature
+exists here - an accepted scope boundary); every street gets speed-limit
+repeater signs (50 km/h arterial, 30 km/h local) at a class-dependent
+interval; and every arterial approach at a real intersection gets a
+street-name sign, one name per edge (a small deterministic word bank) so
+both ends agree. All three are bespoke mesh+FONT objects built directly
+in the new module (mirroring `special_buildings.py`'s sign-building
+idiom), collision-checked against buildings/props/other signs via the
+same `SpatialHashGrid` pattern `props.py` uses.
+
+Discovered along the way: raster-mode presets (Metropole, Industrial)
+currently produce a street graph where *every* node has degree 1 - no
+real intersections at all - because `_raster_street_segments` computes
+each block's street-exit point per-neighbor from that neighbor's own
+center-line direction, so a block touching 3+ neighbors never gets
+coincident exit points to snap into one junction. Stop signs and
+street-name signs are therefore grid-mode-only (Kleinstadt, Dorf) for
+now; speed-limit signs are unaffected (purely per-edge). Documented in
+signage.py's module docstring as a known, pre-existing limitation rather
+than silently worked around - fixing the raster topology itself is a
+separate, larger change.
+
+**Lighting panel** (`ui/panels.py`): promotes what used to be hardcoded
+constants scattered across `operators.py`/`world_mat.py`/`city_mat.py`
+(sun elevation/rotation, day/night sun energy, night-mode window glow
+strength, street lamp energy) into seven live-tunable Scene properties,
+each wired through a `night_mode`-style `update=` callback (no separate
+"Apply" button - these are cheap in-place property writes, not a
+regenerate). An adversarial review pass (multi-agent) caught two real
+gaps before shipping: the Showcase Render operator was still using its
+own independent hardcoded sun constants instead of the new panel values
+(fixed - `ensure_showcase_sun` now accepts the panel's elevation/rotation,
+converted between the Nishita sky's elevation-from-horizon convention and
+the Sun light object's zenith-angle convention), and the new
+`set_sun_energy`/`set_sun_position` functions could have silently
+overwritten an unrelated World's settings if dragged before "Generate
+Terrain" was ever clicked (fixed - both now check `world.name` first).
+
+**Kleinstadt, seed 7 — stop signs + a street-name sign at a real intersection (dense with lamps/trees/cars too):**
+![Signage intersection](docs/progression/v0.7.0-signage-intersection.png)
+
+**Kleinstadt, seed 7 — a speed-limit sign along a local street:**
+![Speed limit sign](docs/progression/v0.7.0-signage-speed-limit.png)
+
+**Live Blender session — new Lighting panel expanded (Sun/Night Mode fields visible):**
+![Blender screenshot](docs/progression/v0.7.0-blender-screenshot.png)
+
+---
+
+## v0.6.0 — Special buildings: supermarket, police station, hospital, fire station, school
 
 Five unique, zone-targeted building types beyond the 12 generic facades,
 placed by explicit selection logic (`generators/city/special_buildings.py`)

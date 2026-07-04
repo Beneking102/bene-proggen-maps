@@ -209,16 +209,18 @@ def _configure_facade_ramp(color_ramp):
         element.color = color
 
 
-def set_night_mode(enabled: bool):
+def set_night_mode(enabled: bool, emission_strength: float = 0.25):
     """Toggle the window material's emissive glow on/off.
 
-    Deliberately modest (0.25, not 1.0): this material is shared by every
-    window on every floor, including upper floors that have no modeled
-    interior behind them, so it needs *some* emission for those to read as
-    "lit" at night - but at full strength it blows out the transmission
-    view of the real ground-floor interiors (generators/city/buildings.py's
-    _build_ground_floor_interior), which then defeats the point of having
-    built them."""
+    `emission_strength` default stays modest (0.25, not 1.0): this
+    material is shared by every window on every floor, including upper
+    floors that have no modeled interior behind them, so it needs *some*
+    emission for those to read as "lit" at night - but at full strength it
+    blows out the transmission view of the real ground-floor interiors
+    (generators/city/buildings.py's _build_ground_floor_interior), which
+    then defeats the point of having built them. Now a tunable parameter
+    (ui/panels.py's Lighting section) rather than a fixed constant, but the
+    same reasoning still applies to whatever value is passed in."""
     import bpy
 
     mat = bpy.data.materials.get(WINDOW_MATERIAL_NAME)
@@ -226,4 +228,4 @@ def set_night_mode(enabled: bool):
         return
     node = mat.node_tree.nodes.get(NIGHT_MODE_NODE_NAME)
     if node is not None:
-        node.outputs[0].default_value = 0.25 if enabled else 0.0
+        node.outputs[0].default_value = emission_strength if enabled else 0.0

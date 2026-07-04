@@ -84,15 +84,42 @@ def apply_night_mode(context, enabled: bool):
     the procedural sky's sun below the horizon (reusing the same Nishita
     sky rather than swapping to a separate flat-color night world, so the
     horizon glow/stars-less dusk tone comes from the same physical model)."""
-    city_mat.set_night_mode(enabled)
-    _update_lamp_lights(enabled)
-    if enabled:
-        world_mat.set_sun_position(context.scene.world, sun_elevation=-0.05, sun_rotation=2.4)
+    settings = context.scene.procgen_maps
+    city_mat.set_night_mode(enabled, settings.window_emission_strength)
+    _update_lamp_lights(enabled, settings.street_lamp_energy)
+    apply_sun_settings(context)
+
+
+def apply_sun_settings(context):
+    """Single source of truth for 'what should the world's sun currently
+    look like' - reconciles the live sun_elevation/sun_rotation/energy
+    Lighting-panel fields (ui/__init__.py) against whichever mode
+    (day/night) is currently active. Called by apply_night_mode and by
+    every sun-field's live update= callback, so dragging any one of them
+    always re-applies the full, currently-correct set."""
+    settings = context.scene.procgen_maps
+    world = context.scene.world
+    if settings.night_mode:
+        world_mat.set_sun_position(world, sun_elevation=settings.night_sun_elevation,
+                                    sun_rotation=settings.sun_rotation)
+        world_mat.set_sun_energy(world, settings.sun_energy_night)
     else:
-        world_mat.set_sun_position(context.scene.world, sun_elevation=0.6, sun_rotation=2.4)
+        world_mat.set_sun_position(world, sun_elevation=settings.sun_elevation,
+                                    sun_rotation=settings.sun_rotation)
+        world_mat.set_sun_energy(world, settings.sun_energy_day)
 
 
-def _update_lamp_lights(enabled: bool):
+def apply_window_emission(context, strength: float):
+    settings = context.scene.procgen_maps
+    city_mat.set_night_mode(settings.night_mode, strength)
+
+
+def apply_street_lamp_energy(context, energy: float):
+    settings = context.scene.procgen_maps
+    _update_lamp_lights(settings.night_mode, energy)
+
+
+def _update_lamp_lights(enabled: bool, energy: float = 400.0):
     for obj in list(bpy.data.objects):
         if obj.get("procgen_maps_asset_id") != "street_lamp":
             continue
@@ -101,15 +128,18 @@ def _update_lamp_lights(enabled: bool):
         if enabled:
             if light_obj is None:
                 light_data = bpy.data.lights.new(light_name, type='POINT')
-                light_data.energy = 400.0
                 light_data.color = (1.0, 0.85, 0.5)
                 light_obj = bpy.data.objects.new(light_name, light_data)
                 light_obj.location = (obj.location.x, obj.location.y, obj.location.z + 3.8)
                 target_collection = obj.users_collection[0] if obj.users_collection else bpy.context.scene.collection
                 target_collection.objects.link(light_obj)
+            light_obj.data.energy = energy
             light_obj.hide_viewport = False
             light_obj.hide_render = False
         elif light_obj is not None:
+            # Still refresh energy on an existing-but-hidden light so a
+            # live slider drag isn't silently lost until the next toggle.
+            light_obj.data.energy = energy
             light_obj.hide_viewport = True
             light_obj.hide_render = True
 
@@ -150,6 +180,7 @@ class PROCGEN_OT_generate_terrain(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
+        settings = context.scene.procgen_maps
         profiler = Profiler()
         params = _get_terrain_params(context.scene)
         with profiler.stage("terrain"):
@@ -158,7 +189,15 @@ class PROCGEN_OT_generate_terrain(bpy.types.Operator):
             mat = bpy.data.materials.get(terrain_mat.TERRAIN_MATERIAL_NAME)
             if mat is not None and mat.name not in obj.data.materials.keys():
                 obj.data.materials.append(mat)
-            context.scene.world = world_mat.get_or_create_sky_world()
+            context.scene.world = world_mat.get_or_create_sky_world(
+                sun_elevation=settings.sun_elevation, sun_rotation=settings.sun_rotation,
+                sun_energy=settings.sun_energy_day)
+            # get_or_create_sky_world only configures the sky on first
+            # creation (it returns the existing world unchanged on later
+            # calls) - apply_sun_settings is what actually guarantees the
+            # current Lighting-panel values (day or night, whichever mode
+            # is active) are reapplied every time terrain is regenerated.
+            apply_sun_settings(context)
         _write_stats(context.scene, profiler, [obj])
         _switch_viewport_to_material_preview(context)
         self.report({'INFO'}, f"Terrain generated ({params.resolution}x{params.resolution})")
@@ -185,11 +224,11 @@ class PROCGEN_OT_generate_city(bpy.types.Operator):
             _assign_city_material(result["building_objects"])
 
         all_objects = (result["street_objects"] + result["building_objects"]
-                       + result["building_extra_objects"] + result["prop_objects"])
+                       + result["building_extra_objects"] + result["prop_objects"] + result["sign_objects"])
         _write_stats(context.scene, profiler, all_objects)
         _switch_viewport_to_material_preview(context)
         self.report({'INFO'}, f"City generated: {len(result['building_objects'])} buildings, "
-                               f"{len(result['prop_objects'])} props")
+                               f"{len(result['prop_objects'])} props, {len(result['sign_placements'])} signs")
         return {'FINISHED'}
 
 
@@ -321,7 +360,9 @@ class PROCGEN_OT_render_showcase(bpy.types.Operator):
         plan = framing.compute_framing(bounds_min, bounds_max, angle=settings.showcase_angle)
 
         showcase.build_showcase_camera(plan)
-        showcase.ensure_showcase_sun(night_mode=settings.night_mode)
+        sun_elevation = settings.night_sun_elevation if settings.night_mode else settings.sun_elevation
+        showcase.ensure_showcase_sun(night_mode=settings.night_mode,
+                                      sun_elevation=sun_elevation, sun_rotation=settings.sun_rotation)
         context.scene.camera = bpy.data.objects.get(showcase.CAMERA_NAME)
 
         filepath = _resolve_export_path(context, "procgen_maps_showcase.png")

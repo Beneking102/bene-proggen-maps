@@ -4,7 +4,7 @@ No bpy.types classes live in this package (operators live in ui/operators.py);
 register()/unregister() are no-ops kept for the subpackage registration
 contract used by procgen_maps/generators/__init__.py.
 """
-from . import buildings, layout, props, special_buildings, streets, zones  # noqa: F401  (re-exported for callers)
+from . import buildings, layout, props, signage, special_buildings, streets, zones  # noqa: F401
 
 CITY_ROOT_COLLECTION_NAME = "ProcgenMaps_City"
 
@@ -38,12 +38,17 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
                                         terrain_params=terrain_params,
                                         building_plans=building_plans + special_plans)
 
+    sign_placements = signage.plan_signage(street_graph, preset, seed=seed, terrain_params=terrain_params,
+                                            building_plans=building_plans + special_plans,
+                                            prop_placements=prop_placements)
+
     if parent_collection is None:
         parent_collection = bpy.context.scene.collection
     root = _get_or_create_collection(CITY_ROOT_COLLECTION_NAME, parent_collection)
     streets_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Streets", root)
     buildings_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Buildings", root)
     props_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Props", root)
+    signage_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Signage", root)
 
     street_objects = streets.build_street_meshes(street_graph, preset, terrain_params, collection=streets_coll)
     building_objects, building_extra_objects = buildings.build_building_meshes(
@@ -51,6 +56,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     special_objects, special_extra_objects = special_buildings.build_special_building_meshes(
         special_plans, terrain_params, collection=buildings_coll)
     prop_objects = props.build_props(prop_placements, collection=props_coll)
+    sign_objects = signage.build_signage_meshes(sign_placements, collection=signage_coll)
 
     return {
         "root_collection": root,
@@ -60,6 +66,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         "building_plans": building_plans,
         "special_building_plans": special_plans,
         "prop_placements": prop_placements,
+        "sign_placements": sign_placements,
         "street_objects": street_objects,
         # Special buildings merged into the same keys as the 12 generic
         # facades: they share the exact same mesh/material shape (see
@@ -68,6 +75,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         "building_objects": building_objects + special_objects,
         "building_extra_objects": building_extra_objects + special_extra_objects,
         "prop_objects": prop_objects,
+        "sign_objects": sign_objects,
     }
 
 

@@ -71,7 +71,22 @@ def build_showcase_camera(plan: framing_calc.FramingPlan):
     return camera_obj
 
 
-def ensure_showcase_sun(night_mode: bool, energy_day=2.0, energy_night=0.08):
+def ensure_showcase_sun(night_mode: bool, energy_day=2.0, energy_night=0.08,
+                         sun_elevation=None, sun_rotation=None):
+    """`sun_elevation`/`sun_rotation`, if given, come from the Lighting
+    panel's ProcgenMapsSettings (ui/panels.py) in materials/world_mat.py's
+    elevation-from-horizon convention (0=horizon, +pi/2=zenith) - the same
+    convention the Nishita sky texture uses. This Sun *light object*
+    instead uses a zenith-angle convention (0=straight down/zenith,
+    pi/2=horizontal/horizon), related by `zenith_angle = pi/2 - elevation`
+    (this is exactly why the old hardcoded DAY_SUN_ELEVATION=0.97 was
+    already "pi/2 - 0.6", world_mat.py's old default day elevation).
+    Falls back to the existing DAY_SUN_ELEVATION/NIGHT_SUN_ELEVATION
+    module constants when not given, so every other caller (the headless
+    smoke test) is unaffected. Energy/color intentionally stay independent
+    or Lighting-panel sun_energy_day/night (Sun-light watts and World
+    Background Strength are different units - see PROGRESSION.md/OPEN
+    RISKS for this feature)."""
     import bpy
 
     sun_data = bpy.data.lights.get(SUN_NAME)
@@ -82,8 +97,14 @@ def ensure_showcase_sun(night_mode: bool, energy_day=2.0, energy_night=0.08):
         sun_obj = bpy.data.objects.new(SUN_NAME, sun_data)
         bpy.context.scene.collection.objects.link(sun_obj)
 
-    elevation = NIGHT_SUN_ELEVATION if night_mode else DAY_SUN_ELEVATION
-    sun_obj.rotation_euler = (elevation, 0.0, SUN_ROTATION_Z)
+    if sun_elevation is None:
+        zenith_angle = NIGHT_SUN_ELEVATION if night_mode else DAY_SUN_ELEVATION
+    else:
+        import math
+        zenith_angle = math.pi / 2.0 - sun_elevation
+    rotation_z = SUN_ROTATION_Z if sun_rotation is None else sun_rotation
+
+    sun_obj.rotation_euler = (zenith_angle, 0.0, rotation_z)
     sun_data.energy = energy_night if night_mode else energy_day
     sun_data.angle = 0.2
     sun_data.color = (0.6, 0.7, 1.0) if night_mode else (1.0, 1.0, 1.0)

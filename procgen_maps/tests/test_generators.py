@@ -9,11 +9,13 @@ from procgen_maps.config.presets import PRESETS
 from procgen_maps.generators.city.buildings import plan_buildings
 from procgen_maps.generators.city.layout import Block, generate_layout
 from procgen_maps.generators.city.props import plan_props
+from procgen_maps.generators.city import signage
+from procgen_maps.generators.city.signage import plan_signage
 from procgen_maps.generators.city.special_buildings import (
     SPECIAL_BUILDING_SPECS,
     plan_special_buildings,
 )
-from procgen_maps.generators.city.streets import build_street_graph
+from procgen_maps.generators.city.streets import StreetGraph, build_street_graph
 from procgen_maps.generators.city.zones import classify_zones
 from procgen_maps.generators.dungeon import DungeonParams, generate_dungeon
 from procgen_maps.generators.terrain import TerrainParams, generate_heightmap, sample_world_height
@@ -184,6 +186,156 @@ def test_preset_pipeline(preset_key):
             building_radius = max(math.hypot(p[0] - cx, p[1] - cy) for p in plan.footprint)
             assert math.hypot(px - cx, py - cy) >= building_radius, (
                 f"{placement.asset_id} at ({px}, {py}) overlaps a building's bounding circle")
+
+    signs = plan_signage(graph, preset, building_plans=plans, prop_placements=placements)
+    assert all(sign.kind in {"stop", "speed_limit", "street_name"} for sign in signs)
+
+    for sign in signs:
+        sx, sy, _ = sign.location
+        sign_radius = signage._SIGN_FOOTPRINT_RADIUS[sign.kind]
+        for plan in plans:
+            cx = sum(p[0] for p in plan.footprint) / len(plan.footprint)
+            cy = sum(p[1] for p in plan.footprint) / len(plan.footprint)
+            building_radius = max(math.hypot(p[0] - cx, p[1] - cy) for p in plan.footprint)
+            assert math.hypot(sx - cx, sy - cy) >= building_radius, (
+                f"{sign.kind} sign at ({sx}, {sy}) overlaps a building's bounding circle")
+        for placement in placements:
+            px, py, _ = placement.location
+            prop_radius = ASSET_DEFS[placement.asset_id].footprint_radius
+            assert math.hypot(sx - px, sy - py) >= sign_radius + prop_radius, (
+                f"{sign.kind} sign at ({sx}, {sy}) overlaps prop {placement.asset_id} at ({px}, {py})")
+
+
+def _make_street_graph(nodes, edges):
+    degree = {}
+    for a, b, _street_class in edges:
+        degree[a] = degree.get(a, 0) + 1
+        degree[b] = degree.get(b, 0) + 1
+    return StreetGraph(nodes=nodes, edges=edges, node_degree=degree)
+
+
+def test_facing_to_rotation_z_matches_base_case_and_quadrants():
+    # Base case: rotation_z=0 must reproduce special_buildings.py's own
+    # fixed (-Y-facing) rotation exactly, since every sign builder in this
+    # module relies on that being the zero point.
+    assert signage._facing_to_rotation_z(0.0, -1.0) == pytest.approx(0.0)
+    assert signage._facing_to_rotation_z(1.0, 0.0) == pytest.approx(math.pi / 2)
+    assert signage._facing_to_rotation_z(0.0, 1.0) == pytest.approx(math.pi)
+    assert signage._facing_to_rotation_z(-1.0, 0.0) == pytest.approx(-math.pi / 2)
+
+
+def test_plan_signage_stop_signs_only_on_local_approaches_at_mixed_intersection():
+    preset = PRESETS["KLEINSTADT"]
+    nodes = [(0.0, 0.0), (30.0, 0.0), (-30.0, 0.0), (0.0, 30.0), (0.0, -30.0)]
+    edges = [(0, 1, "arterial"), (0, 2, "arterial"), (0, 3, "local"), (0, 4, "local")]
+    graph = _make_street_graph(nodes, edges)
+
+    placements = plan_signage(graph, preset, seed=1)
+    stop_signs = [p for p in placements if p.kind == "stop"]
+
+    assert len(stop_signs) == 2
+    # The local arms run along the Y axis (x=0) - a stop sign belongs near
+    # that axis, not out along the arterial (X-axis) through-route.
+    for sign in stop_signs:
+        x, _y, _z = sign.location
+        assert abs(x) < 5.0
+
+
+def test_plan_signage_all_local_intersection_gets_stop_sign_on_every_approach():
+    preset = PRESETS["KLEINSTADT"]
+    nodes = [(0.0, 0.0), (30.0, 0.0), (-30.0, 0.0), (0.0, 30.0), (0.0, -30.0)]
+    edges = [(0, 1, "local"), (0, 2, "local"), (0, 3, "local"), (0, 4, "local")]
+    graph = _make_street_graph(nodes, edges)
+
+    placements = plan_signage(graph, preset, seed=1)
+    assert sum(1 for p in placements if p.kind == "stop") == 4
+
+
+def test_plan_signage_all_arterial_intersection_gets_no_stop_signs():
+    preset = PRESETS["KLEINSTADT"]
+    nodes = [(0.0, 0.0), (30.0, 0.0), (-30.0, 0.0), (0.0, 30.0), (0.0, -30.0)]
+    edges = [(0, 1, "arterial"), (0, 2, "arterial"), (0, 3, "arterial"), (0, 4, "arterial")]
+    graph = _make_street_graph(nodes, edges)
+
+    placements = plan_signage(graph, preset, seed=1)
+    assert all(p.kind != "stop" for p in placements)
+
+
+def test_plan_signage_no_stop_sign_at_degree_two_node():
+    preset = PRESETS["KLEINSTADT"]
+    nodes = [(0.0, 0.0), (30.0, 0.0), (-30.0, 0.0)]
+    edges = [(0, 1, "local"), (0, 2, "local")]
+    graph = _make_street_graph(nodes, edges)
+
+    placements = plan_signage(graph, preset, seed=1)
+    assert all(p.kind != "stop" for p in placements)
+
+
+def test_plan_signage_speed_limit_skips_short_edges():
+    preset = PRESETS["KLEINSTADT"]
+    nodes = [(0.0, 0.0), (5.0, 0.0)]  # shorter than _SPEED_SIGN_MIN_EDGE_LENGTH (15.0)
+    edges = [(0, 1, "local")]
+    graph = _make_street_graph(nodes, edges)
+
+    placements = plan_signage(graph, preset, seed=1)
+    assert all(p.kind != "speed_limit" for p in placements)
+
+
+@pytest.mark.parametrize("preset_key", sorted(PRESETS))
+def test_plan_signage_speed_limit_text_matches_known_values(preset_key):
+    preset = PRESETS[preset_key]
+    layout = generate_layout(preset)
+    graph = build_street_graph(layout.streets)
+
+    placements = plan_signage(graph, preset)
+    speed_signs = [p for p in placements if p.kind == "speed_limit"]
+    assert speed_signs
+    assert all(p.text in {"30", "50"} for p in speed_signs)
+
+
+@pytest.mark.parametrize("preset_key", sorted(PRESETS))
+def test_plan_signage_street_names_use_word_bank_only(preset_key):
+    preset = PRESETS[preset_key]
+    layout = generate_layout(preset)
+    graph = build_street_graph(layout.streets)
+
+    placements = plan_signage(graph, preset)
+    name_signs = [p for p in placements if p.kind == "street_name"]
+    if preset.layout_mode == "grid":
+        # Raster-mode presets (Metropole, Industrial) currently never
+        # produce a real degree>=3 intersection node at all - a pre-
+        # existing street-topology limitation documented in signage.py's
+        # module docstring, not something this assertion should paper
+        # over - so "at least one name sign" can only be guaranteed here
+        # for grid-mode presets (Kleinstadt, Dorf).
+        assert name_signs
+    for sign in name_signs:
+        word, suffix = sign.text.split(" ", 1)
+        assert word in signage._STREET_NAME_WORDS
+        assert suffix in signage._STREET_NAME_SUFFIXES
+
+
+def test_plan_signage_is_deterministic_for_a_given_seed():
+    preset = PRESETS["KLEINSTADT"]
+    layout = generate_layout(preset)
+    graph = build_street_graph(layout.streets)
+
+    def _key(placements):
+        return [(p.kind, p.location, p.rotation_z, p.text) for p in placements]
+
+    placements_a = plan_signage(graph, preset, seed=7)
+    placements_b = plan_signage(graph, preset, seed=7)
+    assert _key(placements_a) == _key(placements_b)
+
+
+def test_plan_signage_street_names_differ_for_different_seeds():
+    preset = PRESETS["KLEINSTADT"]
+    layout = generate_layout(preset)
+    graph = build_street_graph(layout.streets)
+
+    names_a = [p.text for p in plan_signage(graph, preset, seed=7) if p.kind == "street_name"]
+    names_b = [p.text for p in plan_signage(graph, preset, seed=8) if p.kind == "street_name"]
+    assert names_a != names_b
 
 
 @pytest.mark.parametrize("preset_key", sorted(PRESETS))

@@ -73,6 +73,33 @@ class PROCGEN_PT_showcase_panel(bpy.types.Panel):
         layout.operator("procgen_maps.render_showcase")
 
 
+class PROCGEN_PT_lighting_panel(bpy.types.Panel):
+    bl_label = "Lighting"
+    bl_idname = "PROCGEN_PT_lighting_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = _CATEGORY
+    bl_parent_id = "PROCGEN_PT_main_panel"
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.procgen_maps
+
+        layout.label(text="Sun")
+        col = layout.column(align=True)
+        col.prop(settings, "sun_elevation")
+        col.prop(settings, "sun_rotation")
+        row = layout.row(align=True)
+        row.prop(settings, "sun_energy_day")
+        row.prop(settings, "sun_energy_night")
+
+        layout.separator()
+        layout.label(text="Night Mode")
+        layout.prop(settings, "night_sun_elevation")
+        layout.prop(settings, "window_emission_strength")
+        layout.prop(settings, "street_lamp_energy")
+
+
 class PROCGEN_PT_profiler_panel(bpy.types.Panel):
     bl_label = "Profiler"
     bl_idname = "PROCGEN_PT_profiler_panel"
@@ -91,7 +118,8 @@ class PROCGEN_PT_profiler_panel(bpy.types.Panel):
         layout.label(text=f"Last generate: {settings.stat_generate_seconds:.2f}s")
 
 
-classes = (PROCGEN_PT_main_panel, PROCGEN_PT_export_panel, PROCGEN_PT_showcase_panel, PROCGEN_PT_profiler_panel)
+classes = (PROCGEN_PT_main_panel, PROCGEN_PT_export_panel, PROCGEN_PT_showcase_panel,
+           PROCGEN_PT_lighting_panel, PROCGEN_PT_profiler_panel)
 
 
 def register():

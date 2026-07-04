@@ -24,6 +24,10 @@ and exports them to common interchange formats. Targets Blender 4.2+.
   station, school), placed by explicit zone/size selection rather than the
   random facade pick, each with an illuminated sign and, for hospitals, a
   rooftop helipad (`procgen_maps/generators/city/special_buildings.py`).
+- **Street signage**: stop signs, speed-limit signs, and street-name
+  signs placed by rule-based logic (intersection degree + street
+  hierarchy, not random density), each a bespoke mesh+text object
+  (`procgen_maps/generators/city/signage.py`).
 - **Separate BSP dungeon generator**, independent of the city/terrain
   pipeline - rooms and corridors from binary space partitioning.
 - **Procedural placeholder props**: 12 tree variants, a street lamp, a
@@ -36,6 +40,9 @@ and exports them to common interchange formats. Targets Blender 4.2+.
 - **Night mode**: emissive building windows plus real point lights at every
   street lamp, toggled from the panel - also dips the procedural sky's sun
   below the horizon.
+- **Lighting panel**: live-tunable sun elevation/rotation/day-night energy,
+  window night-glow strength, and street lamp energy, each applying
+  immediately (no regenerate needed).
 - **Procedural sky + material detail**: a Nishita sky world (no HDRI file
   needed) plus noise-driven grain/bump on facade and terrain materials for
   higher-quality renders without baked textures.
