@@ -1,13 +1,19 @@
-"""Street signage: stop signs, speed-limit signs, and street-name signs -
-placed by deterministic, rule-based logic driven by the street graph's
-intersection degree (reusing streets.py's own >=3 "real intersection" gate
-via graph.node_degree) and street_class hierarchy (arterial/local), the
-same way zones.py is rule-based classification rather than props.py's
-density-driven scatter. Concretely: a local approach at any real
-intersection always gets a stop sign (an all-arterial intersection gets
-none - there's no traffic-light feature in this codebase, an accepted
-scope boundary); every street gets speed-limit repeater signs at a
-class-dependent interval; and every arterial approach at a real
+"""Street signage: stop signs, speed-limit signs, street-name signs, and
+traffic lights - placed by deterministic, rule-based logic driven by the
+street graph's intersection degree (reusing streets.py's own >=3 "real
+intersection" gate via graph.node_degree) and street_class hierarchy
+(arterial/local), the same way zones.py is rule-based classification
+rather than props.py's density-driven scatter.
+
+At every real intersection, the pair of incident edges most nearly
+opposite each other (see _find_through_pair) is treated as the priority
+"through" route and never gets a stop sign, mirroring how a real minor
+junction works - only the non-through local approaches stop. Any
+intersection with 2+ arterial approaches gets a traffic light instead
+(a decorative red/yellow/green head, no simulation) rather than nothing,
+since a real arterial-arterial crossing is normally signaled, not
+stop-sign controlled. Every street still gets speed-limit repeater signs
+at a class-dependent interval, and every arterial approach at a real
 intersection gets a street-name sign (one name drawn per edge, from a
 small deterministic word bank, so both ends of the same edge agree).
 
@@ -51,7 +57,7 @@ from .streets import StreetGraph
 SIGNAGE_PREFIX = "ProcgenMaps_Signage"
 
 SPEED_LIMIT_KMH = {"arterial": 50, "local": 30}
-_SPEED_SIGN_INTERVAL = {"arterial": 100.0, "local": 150.0}
+_SPEED_SIGN_INTERVAL = {"arterial": 140.0, "local": 200.0}
 _SPEED_SIGN_MIN_EDGE_LENGTH = 15.0
 
 _STREET_NAME_WORDS = ("Oak", "Maple", "Elm", "Birch", "Cedar", "Willow", "Pine", "Ash",
@@ -59,7 +65,14 @@ _STREET_NAME_WORDS = ("Oak", "Maple", "Elm", "Birch", "Cedar", "Willow", "Pine",
 _STREET_NAME_SUFFIXES = ("Street", "Avenue", "Boulevard", "Lane", "Road", "Way", "Drive")
 _SIGNAGE_SEED_OFFSET = 51829  # decorrelates this module's rng stream from special_buildings.py's (+9973)
 
-_SIGN_FOOTPRINT_RADIUS = {"stop": 0.4, "speed_limit": 0.35, "street_name": 0.45}
+# A pair of incident edges at a node is treated as one continuous priority
+# "through" route (see _find_through_pair) when their outward directions
+# are within this far of exactly opposite (dot product of the two unit
+# direction vectors below this threshold). -1.0 is perfectly opposite;
+# -0.5 allows roughly +-60 degrees of slack for jittered grid geometry.
+_THROUGH_ROUTE_DOT_THRESHOLD = -0.5
+
+_SIGN_FOOTPRINT_RADIUS = {"stop": 0.4, "speed_limit": 0.35, "street_name": 0.45, "traffic_light": 0.3}
 
 _POLE_HALF_WIDTH = 0.03
 _SPEED_SIGN_POLE_HEIGHT = 2.0
@@ -73,6 +86,12 @@ _NAME_SIGN_BOARD_THICKNESS = 0.03
 _STOP_SIGN_POLE_HEIGHT = 2.3
 _STOP_SIGN_BOARD_RADIUS = 0.35
 _STOP_SIGN_BOARD_THICKNESS = 0.03
+_TRAFFIC_LIGHT_POLE_HEIGHT = 4.0
+_TRAFFIC_LIGHT_HEAD_WIDTH = 0.28
+_TRAFFIC_LIGHT_HEAD_DEPTH = 0.18
+_TRAFFIC_LIGHT_HEAD_HEIGHT = 0.8
+_TRAFFIC_LIGHT_LENS_SIZE = 0.16
+_TRAFFIC_LIGHT_LENS_THICKNESS = 0.02
 
 
 @dataclass
@@ -103,6 +122,43 @@ def _build_incident_edges(graph: StreetGraph) -> Dict[int, List[int]]:
         incident[a].append(i)
         incident[b].append(i)
     return incident
+
+
+def _find_through_pair(node: int, incident_edge_indices: List[int], graph: StreetGraph):
+    """Return the set of {edge_index, edge_index} for the pair of incident
+    edges whose outward-from-node directions are closest to exactly
+    opposite - treated as one continuous priority route that doesn't stop,
+    the same way a real minor intersection has one street that "keeps
+    going" without a stop sign. Returns an empty set if there are fewer
+    than 2 usable directions or no pair is within
+    _THROUGH_ROUTE_DOT_THRESHOLD of opposite."""
+    node_pos = graph.nodes[node]
+    directions = []
+    for edge_index in incident_edge_indices:
+        a, b, _street_class = graph.edges[edge_index]
+        other = b if a == node else a
+        other_pos = graph.nodes[other]
+        dx = node_pos[0] - other_pos[0]
+        dy = node_pos[1] - other_pos[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            continue
+        directions.append((edge_index, dx / length, dy / length))
+
+    best_pair = None
+    best_dot = 1.0
+    for i in range(len(directions)):
+        for j in range(i + 1, len(directions)):
+            _, ax1, ay1 = directions[i]
+            _, ax2, ay2 = directions[j]
+            dot = ax1 * ax2 + ay1 * ay2
+            if dot < best_dot:
+                best_dot = dot
+                best_pair = (directions[i][0], directions[j][0])
+
+    if best_pair is not None and best_dot < _THROUGH_ROUTE_DOT_THRESHOLD:
+        return {best_pair[0], best_pair[1]}
+    return set()
 
 
 def plan_signage(graph: StreetGraph, preset, seed=None, terrain_params=None,
@@ -153,15 +209,20 @@ def plan_signage(graph: StreetGraph, preset, seed=None, terrain_params=None,
 
     incident = _build_incident_edges(graph)
 
-    # Stop signs: every local approach at a real (degree >= 3) intersection.
-    # An all-arterial intersection therefore gets none (no traffic-light
-    # feature exists in this codebase - an accepted scope boundary), and an
-    # all-local intersection gets one on every approach (an all-way stop).
+    # Stop signs: every local approach at a real (degree >= 3) intersection,
+    # except the one pair of edges forming the priority "through" route
+    # (_find_through_pair) - that route never stops, matching how a real
+    # minor junction works, and meaningfully cutting down how many stop
+    # signs cluster at ordinary intersections. An all-arterial intersection
+    # gets a traffic light instead (below), not stop signs.
     for node, degree in graph.node_degree.items():
         if degree < 3:
             continue
         node_pos = graph.nodes[node]
+        through_pair = _find_through_pair(node, incident[node], graph)
         for edge_index in incident[node]:
+            if edge_index in through_pair:
+                continue
             a, b, street_class = graph.edges[edge_index]
             if street_class != "local":
                 continue
@@ -174,12 +235,41 @@ def plan_signage(graph: StreetGraph, preset, seed=None, terrain_params=None,
             ax, ay = dx / length, dy / length
             perp_x, perp_y = -ay, ax
             half_width = preset.street_width_local / 2.0
-            setback = max(preset.street_width_arterial, preset.street_width_local) / 2.0 + 1.5
+            # Clamped to a fraction of this edge's own length - otherwise a
+            # short edge (a tight jittered block corner, a short cross
+            # street) could push the sign's setback past the edge's other
+            # endpoint entirely, landing it off the street altogether.
+            setback = min(max(preset.street_width_arterial, preset.street_width_local) / 2.0 + 1.5,
+                          length * 0.4)
             side_offset = half_width + 1.0
             x = node_pos[0] - ax * setback + perp_x * side_offset
             y = node_pos[1] - ay * setback + perp_y * side_offset
             rotation_z = _facing_to_rotation_z(-ax, -ay)  # faces back toward `other`, the oncoming driver
             try_place("stop", x, y, rotation_z)
+
+    # Traffic lights: any intersection with 2+ arterial incident edges (an
+    # arterial-arterial crossing) gets one instead of relying on stop
+    # signs or nothing - real crossings like this are normally signaled.
+    for node, degree in graph.node_degree.items():
+        if degree < 3:
+            continue
+        node_pos = graph.nodes[node]
+        arterial_edges = [e for e in incident[node] if graph.edges[e][2] == "arterial"]
+        if len(arterial_edges) < 2:
+            continue
+        a, b, _street_class = graph.edges[arterial_edges[0]]
+        other = b if a == node else a
+        other_pos = graph.nodes[other]
+        dx, dy = node_pos[0] - other_pos[0], node_pos[1] - other_pos[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-6:
+            continue
+        ax, ay = dx / length, dy / length
+        perp_x, perp_y = -ay, ax
+        offset = min(max(preset.street_width_arterial, preset.street_width_local) / 2.0 + 1.5, length * 0.4)
+        x = node_pos[0] + perp_x * offset
+        y = node_pos[1] + perp_y * offset
+        try_place("traffic_light", x, y, rotation_z=0.0)
 
     # Speed-limit repeater signs: per-edge, independent of prop_density
     # (a traffic-logic rule, not a decorative-density knob).
@@ -227,7 +317,8 @@ def plan_signage(graph: StreetGraph, preset, seed=None, terrain_params=None,
             ax, ay = dx / length, dy / length
             perp_x, perp_y = -ay, ax
             half_width = preset.street_width_arterial / 2.0
-            setback = max(preset.street_width_arterial, preset.street_width_local) / 2.0 + 1.5
+            setback = min(max(preset.street_width_arterial, preset.street_width_local) / 2.0 + 1.5,
+                          length * 0.4)
             side_offset = half_width + 1.0
             x = node_pos[0] - ax * setback - perp_x * side_offset   # opposite curb from the stop-sign slot
             y = node_pos[1] - ay * setback - perp_y * side_offset
@@ -269,6 +360,24 @@ def _post_mesh_data(pole_height):
     verts = [
         (-hp, -hp, 0.0), (hp, -hp, 0.0), (hp, hp, 0.0), (-hp, hp, 0.0),
         (-hp, -hp, pole_height), (hp, -hp, pole_height), (hp, hp, pole_height), (-hp, hp, pole_height),
+    ]
+    faces = [(0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7), (0, 3, 2, 1), (4, 5, 6, 7)]
+    return verts, faces
+
+
+def _rect_prism_data(width, depth, height, x_offset=0.0, y_offset=0.0, z0=0.0):
+    """(verts, faces) for an axis-aligned box: width along local X, depth
+    along local Y, height along local Z, bottom at z0, centered at
+    (x_offset, y_offset) in XY. Used for the traffic light's head and lens
+    insets, where several differently-sized/positioned boxes need to be
+    combined into one mesh (unlike the single-board signs' fixed layout)."""
+    hw, hd = width / 2.0, depth / 2.0
+    z1 = z0 + height
+    verts = [
+        (x_offset - hw, y_offset - hd, z0), (x_offset + hw, y_offset - hd, z0),
+        (x_offset + hw, y_offset + hd, z0), (x_offset - hw, y_offset + hd, z0),
+        (x_offset - hw, y_offset - hd, z1), (x_offset + hw, y_offset - hd, z1),
+        (x_offset + hw, y_offset + hd, z1), (x_offset - hw, y_offset + hd, z1),
     ]
     faces = [(0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7), (0, 3, 2, 1), (4, 5, 6, 7)]
     return verts, faces
@@ -427,10 +536,74 @@ def _build_street_name_sign(name, placement: SignPlacement):
     return [obj, text_obj]
 
 
+def _build_traffic_light(name, placement: SignPlacement):
+    """Post + a dark head box + 3 stacked red/yellow/green lens insets on
+    its front (-Y-default) face - decorative only, no simulation, but a
+    recognizable traffic light silhouette rather than a plain box."""
+    import bpy
+
+    verts_post, faces_post = _post_mesh_data(_TRAFFIC_LIGHT_POLE_HEIGHT)
+    all_verts = list(verts_post)
+    all_faces = list(faces_post)
+
+    def _append(verts, faces):
+        offset = len(all_verts)
+        all_verts.extend(verts)
+        all_faces.extend(tuple(i + offset for i in f) for f in faces)
+
+    head_verts, head_faces = _rect_prism_data(_TRAFFIC_LIGHT_HEAD_WIDTH, _TRAFFIC_LIGHT_HEAD_DEPTH,
+                                               _TRAFFIC_LIGHT_HEAD_HEIGHT, z0=_TRAFFIC_LIGHT_POLE_HEIGHT)
+    _append(head_verts, head_faces)
+
+    lens_depth_y = -(_TRAFFIC_LIGHT_HEAD_DEPTH / 2.0 + _TRAFFIC_LIGHT_LENS_THICKNESS / 2.0)
+    lens_z_centers = [
+        _TRAFFIC_LIGHT_POLE_HEIGHT + _TRAFFIC_LIGHT_HEAD_HEIGHT * 0.78,
+        _TRAFFIC_LIGHT_POLE_HEIGHT + _TRAFFIC_LIGHT_HEAD_HEIGHT * 0.50,
+        _TRAFFIC_LIGHT_POLE_HEIGHT + _TRAFFIC_LIGHT_HEAD_HEIGHT * 0.22,
+    ]
+    lens_face_starts = []
+    for lens_z_center in lens_z_centers:
+        lens_face_starts.append(len(all_faces))
+        lens_verts, lens_faces = _rect_prism_data(
+            _TRAFFIC_LIGHT_LENS_SIZE, _TRAFFIC_LIGHT_LENS_THICKNESS, _TRAFFIC_LIGHT_LENS_SIZE,
+            y_offset=lens_depth_y, z0=lens_z_center - _TRAFFIC_LIGHT_LENS_SIZE / 2.0)
+        _append(lens_verts, lens_faces)
+
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(all_verts, [], all_faces)
+    mesh.update(calc_edges=True)
+
+    body_mat = _get_or_create_signage_material("traffic_light_body", (0.08, 0.08, 0.08, 1.0))
+    red_mat = _get_or_create_signage_material("traffic_light_red", (0.85, 0.1, 0.05, 1.0), emission_strength=1.0)
+    yellow_mat = _get_or_create_signage_material("traffic_light_yellow", (0.9, 0.75, 0.05, 1.0),
+                                                  emission_strength=0.4)
+    green_mat = _get_or_create_signage_material("traffic_light_green", (0.05, 0.65, 0.15, 1.0),
+                                                 emission_strength=0.4)
+    for mat in (body_mat, red_mat, yellow_mat, green_mat):
+        mesh.materials.append(mat)
+
+    for index, polygon in enumerate(mesh.polygons):
+        if index < lens_face_starts[0]:
+            polygon.material_index = 0  # pole + head
+        elif index < lens_face_starts[1]:
+            polygon.material_index = 1  # red
+        elif index < lens_face_starts[2]:
+            polygon.material_index = 2  # yellow
+        else:
+            polygon.material_index = 3  # green
+
+    obj = bpy.data.objects.new(name, mesh)
+    obj.location = placement.location
+    obj.rotation_euler = (0.0, 0.0, placement.rotation_z)
+    obj["procgen_maps_sign_kind"] = "traffic_light"
+    return [obj]
+
+
 _BUILDERS = {
     "stop": _build_stop_sign,
     "speed_limit": _build_speed_limit_sign,
     "street_name": _build_street_name_sign,
+    "traffic_light": _build_traffic_light,
 }
 
 

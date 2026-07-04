@@ -188,7 +188,7 @@ def test_preset_pipeline(preset_key):
                 f"{placement.asset_id} at ({px}, {py}) overlaps a building's bounding circle")
 
     signs = plan_signage(graph, preset, building_plans=plans, prop_placements=placements)
-    assert all(sign.kind in {"stop", "speed_limit", "street_name"} for sign in signs)
+    assert all(sign.kind in {"stop", "speed_limit", "street_name", "traffic_light"} for sign in signs)
 
     for sign in signs:
         sx, sy, _ = sign.location
@@ -233,6 +233,8 @@ def test_plan_signage_stop_signs_only_on_local_approaches_at_mixed_intersection(
     placements = plan_signage(graph, preset, seed=1)
     stop_signs = [p for p in placements if p.kind == "stop"]
 
+    # Both arterial edges are the through-route regardless (they're exactly
+    # opposite each other), so both local approaches still stop.
     assert len(stop_signs) == 2
     # The local arms run along the Y axis (x=0) - a stop sign belongs near
     # that axis, not out along the arterial (X-axis) through-route.
@@ -241,17 +243,27 @@ def test_plan_signage_stop_signs_only_on_local_approaches_at_mixed_intersection(
         assert abs(x) < 5.0
 
 
-def test_plan_signage_all_local_intersection_gets_stop_sign_on_every_approach():
+def test_plan_signage_all_local_intersection_exempts_the_through_route():
+    # The east-west arms (to (30,0)/(-30,0)) are exactly opposite each
+    # other and are found first (see _find_through_pair's tie-breaking),
+    # so they're treated as the priority through route and don't stop -
+    # only the north-south arms do. This is the "too many stop signs"
+    # fix: a real 4-way all-local intersection now reads as a 2-way stop,
+    # not an all-way stop.
     preset = PRESETS["KLEINSTADT"]
     nodes = [(0.0, 0.0), (30.0, 0.0), (-30.0, 0.0), (0.0, 30.0), (0.0, -30.0)]
     edges = [(0, 1, "local"), (0, 2, "local"), (0, 3, "local"), (0, 4, "local")]
     graph = _make_street_graph(nodes, edges)
 
     placements = plan_signage(graph, preset, seed=1)
-    assert sum(1 for p in placements if p.kind == "stop") == 4
+    stop_signs = [p for p in placements if p.kind == "stop"]
+    assert len(stop_signs) == 2
+    for sign in stop_signs:
+        x, _y, _z = sign.location
+        assert abs(x) < 5.0  # only the north-south (x=0) arms stop
 
 
-def test_plan_signage_all_arterial_intersection_gets_no_stop_signs():
+def test_plan_signage_all_arterial_intersection_gets_traffic_light_not_stop_signs():
     preset = PRESETS["KLEINSTADT"]
     nodes = [(0.0, 0.0), (30.0, 0.0), (-30.0, 0.0), (0.0, 30.0), (0.0, -30.0)]
     edges = [(0, 1, "arterial"), (0, 2, "arterial"), (0, 3, "arterial"), (0, 4, "arterial")]
@@ -259,6 +271,51 @@ def test_plan_signage_all_arterial_intersection_gets_no_stop_signs():
 
     placements = plan_signage(graph, preset, seed=1)
     assert all(p.kind != "stop" for p in placements)
+    assert sum(1 for p in placements if p.kind == "traffic_light") == 1
+
+
+def test_find_through_pair_picks_the_most_opposite_edges():
+    nodes = [(0.0, 0.0), (30.0, 0.0), (-30.0, 0.0), (0.0, 30.0), (0.0, -30.0)]
+    edges = [(0, 1, "local"), (0, 2, "local"), (0, 3, "local"), (0, 4, "local")]
+    graph = _make_street_graph(nodes, edges)
+    incident = signage._build_incident_edges(graph)
+
+    through_pair = signage._find_through_pair(0, incident[0], graph)
+
+    assert through_pair == {0, 1}  # the two east-west edges (indices 0 and 1)
+
+
+def test_find_through_pair_empty_when_nothing_is_roughly_opposite():
+    # Three edges all within 90 degrees of each other (a Y-shaped fork) -
+    # no pair is anywhere near opposite, so there's no priority route.
+    nodes = [(0.0, 0.0), (30.0, 5.0), (30.0, -5.0), (30.0, 0.0)]
+    edges = [(0, 1, "local"), (0, 2, "local"), (0, 3, "local")]
+    graph = _make_street_graph(nodes, edges)
+    incident = signage._build_incident_edges(graph)
+
+    through_pair = signage._find_through_pair(0, incident[0], graph)
+    assert through_pair == set()
+
+
+def test_plan_signage_stop_sign_setback_never_overshoots_a_short_edge():
+    # The unclamped setback formula (max(street widths)/2 + 1.5, ~6.5m for
+    # Kleinstadt) would push the sign past this 4m-long local edge's own
+    # far endpoint entirely - landing it off the street, exactly the "signs
+    # not on the street" bug. The clamp caps setback at 40% of the edge's
+    # own length instead.
+    preset = PRESETS["KLEINSTADT"]
+    nodes = [(0.0, 0.0), (30.0, 0.0), (-30.0, 0.0), (0.0, 4.0), (0.0, -4.0)]
+    edges = [(0, 1, "arterial"), (0, 2, "arterial"), (0, 3, "local"), (0, 4, "local")]
+    graph = _make_street_graph(nodes, edges)
+
+    placements = plan_signage(graph, preset, seed=1)
+    stop_signs = [p for p in placements if p.kind == "stop"]
+    assert len(stop_signs) == 2
+    for sign in stop_signs:
+        _x, y, _z = sign.location
+        # Node 0 is at y=0; the two local edges run to y=4 and y=-4. The
+        # sign must stay between the node and that edge's own endpoint.
+        assert -4.0 < y < 4.0
 
 
 def test_plan_signage_no_stop_sign_at_degree_two_node():

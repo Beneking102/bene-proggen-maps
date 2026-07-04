@@ -6,7 +6,68 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.7.0 — Street signage/traffic logic + a Lighting configuration panel (current)
+## v0.8.0 — Bugfix round: terrain grounding, signage clutter/traffic lights, raytraced glass, 4K defaults (current)
+
+A direct user bug report ("terrain still bugging and overlapping, many signs
+not on the street, cars not aligned, too many street signs and no traffic
+lights, no glass for windows/no interior visible") drove this round. Root
+causes, investigated with a live diagnostic pipeline (headless renders of a
+worst-case sloped building, a top-down car/street check, and a raytracing
+on/off comparison) before touching any code:
+
+- **Terrain "overlapping"**: the visible terrain mesh was far too coarse
+  (256x256 over a 1000m world, ~3.9m/cell) relative to the noise detail
+  every building/street/prop/sign samples *exactly* via
+  `sample_world_height` - the coarse mesh simply couldn't agree with the
+  precise value everything else used, so buildings could clip into or
+  float above the ground on any real slope (measured up to 8m of height
+  variance under one building's own footprint). Fixed two ways:
+  terrain resolution doubled to 512, noise gentled (broader scale, one
+  fewer octave, roughly half the old amplitude) so the mesh and the
+  sampled field agree far better everywhere; and a new
+  `generators/terrain.py:flatten_terrain_for_footprints`, called from
+  `generate_city` right after building placement, locally reshapes the
+  ground mesh under every building footprint to match that building's
+  own already-chosen base height, with a smooth blend at the edges - a
+  building's foundation is now guaranteed flush with the visible ground,
+  not just statistically likely to be close.
+- **Too many stop signs, no traffic lights**: `signage.py`'s stop-sign
+  rule now exempts the one pair of incident edges most nearly opposite
+  each other at any intersection (`_find_through_pair`) - the priority
+  "through" route, mirroring how a real minor junction works - roughly
+  halving stop-sign counts at ordinary 4-way intersections. Any
+  intersection with 2+ arterial approaches gets a new decorative
+  red/yellow/green traffic light instead of nothing (previously an
+  accepted gap). Speed-limit repeater spacing was also widened.
+- **Signs not on the street**: the stop-sign/street-name setback distance
+  was never clamped against the incident edge's own length - on a short
+  block-corner edge it could push the sign's position past the far
+  endpoint entirely. Now capped at 40% of the edge's own length.
+- **No glass, no visible interiors**: window transmission
+  (`materials/city_mat.py`'s glass material) only actually renders as
+  see-through with EEVEE Next's raytracing enabled - which was previously
+  only ever turned on inside the one-off Showcase Render button, never
+  for the main generate flow or the live viewport. Both `Generate
+  Terrain` and `Generate City` now enable it by default.
+- **4K quality defaults**: Showcase Render resolution default raised to
+  3840x2160 at 256 samples (from 1280x800/128).
+- Investigated but not a bug: parked-car rotation/offset math checked out
+  correct (length axis matches the street direction, offset matches the
+  curb-clearance formula exactly) - the "not aligned" impression traces
+  back to the same terrain-mismatch root cause above, now much reduced.
+
+**Kleinstadt, seed 7 — 4K hero overview (3840x2160, buildings now flush with the ground):**
+![4K hero overview](docs/progression/v0.8.0-hero-overview-4k.png)
+
+**Kleinstadt, seed 7 — a new traffic light at an arterial crossing, POLICE/HOSPITAL/SCHOOL special buildings nearby:**
+![Traffic light intersection](docs/progression/v0.8.0-traffic-light-intersection.png)
+
+**Live Blender session — Lighting panel + 4K showcase defaults visible, city properly grounded:**
+![Blender screenshot](docs/progression/v0.8.0-blender-screenshot.png)
+
+---
+
+## v0.7.0 — Street signage/traffic logic + a Lighting configuration panel
 
 Two features this round. **Street signage** (`generators/city/signage.py`):
 deterministic, rule-based sign placement driven by the street graph's own

@@ -42,6 +42,8 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
                                             building_plans=building_plans + special_plans,
                                             prop_placements=prop_placements)
 
+    _flatten_terrain_under_buildings(terrain_params, building_plans + special_plans)
+
     if parent_collection is None:
         parent_collection = bpy.context.scene.collection
     root = _get_or_create_collection(CITY_ROOT_COLLECTION_NAME, parent_collection)
@@ -77,6 +79,36 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         "prop_objects": prop_objects,
         "sign_objects": sign_objects,
     }
+
+
+def _flatten_terrain_under_buildings(terrain_params, plans):
+    """Reshape the visible terrain mesh so every building's flat foundation
+    sits flush on the ground, using the exact same base_z formula
+    buildings.build_building_meshes uses (footprint-centroid height
+    sample) - see generators/terrain.py's flatten_terrain_for_footprints
+    for why the mesh needs this at all (a coarse grid can't otherwise
+    match the precise continuous height every building/street/prop/sign
+    samples directly)."""
+    import bpy
+
+    from .. import terrain as terrain_gen
+    from ...config import settings as global_settings
+
+    if terrain_params is None or not plans:
+        return
+    terrain_obj = bpy.data.objects.get(terrain_gen.TERRAIN_OBJECT_NAME)
+    if terrain_obj is None:
+        return
+
+    footprints_with_target_z = []
+    for plan in plans:
+        cx = sum(p[0] for p in plan.footprint) / len(plan.footprint)
+        cy = sum(p[1] for p in plan.footprint) / len(plan.footprint)
+        base_z = terrain_gen.sample_world_height(cx, cy, terrain_params)
+        footprints_with_target_z.append((plan.footprint, base_z))
+
+    terrain_gen.flatten_terrain_for_footprints(terrain_obj, terrain_params, footprints_with_target_z,
+                                                margin=global_settings.TERRAIN_FLATTEN_MARGIN)
 
 
 def clear_city():

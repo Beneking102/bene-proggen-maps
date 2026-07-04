@@ -173,6 +173,21 @@ def _switch_viewport_to_material_preview(context):
                     space.shading.type = 'MATERIAL'
 
 
+def _enable_high_quality_rendering(context):
+    """Window glass (materials/city_mat.py's get_or_create_window_material)
+    only renders as transparent - showing the furnished interiors behind it
+    - with EEVEE Next's raytracing enabled; previously this was only ever
+    turned on inside rendering/showcase.py's one-off showcase render, so
+    every window looked like an opaque flat panel and no interior was ever
+    visible just from generating and looking around. Set once here so it's
+    on by default the moment there's anything to look at, in both the
+    viewport and any F12 render - not just the dedicated showcase button."""
+    try:
+        context.scene.eevee.use_raytracing = True
+    except AttributeError:
+        pass  # older/non-EEVEE-Next engine without this setting - nothing to enable
+
+
 class PROCGEN_OT_generate_terrain(bpy.types.Operator):
     bl_idname = "procgen_maps.generate_terrain"
     bl_label = "Generate Terrain"
@@ -200,6 +215,7 @@ class PROCGEN_OT_generate_terrain(bpy.types.Operator):
             apply_sun_settings(context)
         _write_stats(context.scene, profiler, [obj])
         _switch_viewport_to_material_preview(context)
+        _enable_high_quality_rendering(context)
         self.report({'INFO'}, f"Terrain generated ({params.resolution}x{params.resolution})")
         return {'FINISHED'}
 
@@ -227,6 +243,7 @@ class PROCGEN_OT_generate_city(bpy.types.Operator):
                        + result["building_extra_objects"] + result["prop_objects"] + result["sign_objects"])
         _write_stats(context.scene, profiler, all_objects)
         _switch_viewport_to_material_preview(context)
+        _enable_high_quality_rendering(context)
         self.report({'INFO'}, f"City generated: {len(result['building_objects'])} buildings, "
                                f"{len(result['prop_objects'])} props, {len(result['sign_placements'])} signs")
         return {'FINISHED'}

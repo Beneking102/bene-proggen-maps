@@ -111,7 +111,7 @@ def ensure_showcase_sun(night_mode: bool, energy_day=2.0, energy_night=0.08,
     return sun_obj
 
 
-def configure_render_settings(resolution=(1280, 800), samples=128):
+def configure_render_settings(resolution=(3840, 2160), samples=256):
     import bpy
 
     scene = bpy.context.scene
@@ -128,7 +128,7 @@ def configure_render_settings(resolution=(1280, 800), samples=128):
     scene.render.resolution_y = resolution[1]
 
 
-def render_showcase(filepath, resolution=(1280, 800), samples=128):
+def render_showcase(filepath, resolution=(3840, 2160), samples=256):
     import bpy
 
     configure_render_settings(resolution=resolution, samples=samples)
