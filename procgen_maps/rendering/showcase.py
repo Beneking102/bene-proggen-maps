@@ -49,6 +49,66 @@ def collect_scene_bounds(root_collection):
     return tuple(min_co), tuple(max_co)
 
 
+def build_interior_framing(building_obj, view_distance=7.0, eye_height=1.5, min_view_distance=2.5):
+    """Frame a camera outside a building's entrance wall, aimed through it,
+    so the furnished ground-floor interior (generators/city/buildings.py's
+    _build_ground_floor_interior) is visible through the transmissive
+    window/entrance glass (needs raytracing - see
+    _enable_high_quality_rendering in ui/operators.py).
+
+    Every building's entrance is built on the world -Y side of its own
+    footprint regardless of preset or facade (_build_single_building picks
+    `entrance_face = min(side_faces, key=... .y)`), and is itself glass
+    (_add_entrance sets material_index=1, the transmissive window
+    material) - so a camera placed at a fixed offset in -Y from the
+    footprint, at eye height, aimed back at the building, should reliably
+    look straight through the entrance into the interior for *any*
+    building. In practice a naive fixed offset can land past a
+    neighboring building on the far side of a narrow street (block gaps
+    can be under 8m) - a straight-line raycast against the actual scene
+    geometry, backing off in 1m steps until clear (or a floor is hit),
+    guarantees line of sight to the entrance isn't blocked by anything
+    other than the target building itself."""
+    import bpy
+    import mathutils
+
+    corners = [building_obj.matrix_world @ mathutils.Vector(c) for c in building_obj.bound_box]
+    min_x = min(c.x for c in corners)
+    max_x = max(c.x for c in corners)
+    min_y = min(c.y for c in corners)
+    min_z = min(c.z for c in corners)
+    cx = (min_x + max_x) / 2.0
+    target = mathutils.Vector((cx, min_y, min_z + eye_height * 1.05))
+
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    distance = view_distance
+    while distance >= min_view_distance:
+        cam_pos = mathutils.Vector((cx, min_y - distance, min_z + eye_height))
+        direction = target - cam_pos
+        ray_length = direction.length
+        direction.normalize()
+        # Stop just short of the entrance face itself, so a hit on the
+        # target building's own near wall at the very end of the ray
+        # doesn't read as an obstruction.
+        result, _location, _normal, _index, hit_obj, _matrix = bpy.context.scene.ray_cast(
+            depsgraph, cam_pos, direction, distance=max(ray_length - 0.5, 0.01))
+        if not result or hit_obj == building_obj:
+            break
+        distance -= 1.0
+    else:
+        distance = min_view_distance
+
+    camera_location = (cx, min_y - distance, min_z + eye_height)
+
+    return framing_calc.FramingPlan(
+        center=(cx, min_y, min_z + eye_height),
+        camera_location=camera_location,
+        look_at=tuple(target),
+        focal_length=22.0,
+        clip_end=max(view_distance * 20.0, 500.0),
+    )
+
+
 def build_showcase_camera(plan: framing_calc.FramingPlan):
     import bpy
     import mathutils
@@ -122,6 +182,19 @@ def configure_render_settings(resolution=(3840, 2160), samples=256):
     try:
         scene.eevee.use_raytracing = True
         scene.eevee.taa_render_samples = samples
+        # Ambient occlusion and higher-quality shadows/GI - this is a
+        # one-off "make it look as good as possible" render, not the live
+        # viewport, so the extra cost is worth it. Confirmed via a live
+        # property probe: shadow_resolution_scale's own hard max is 1.0
+        # (already the default, nothing to raise there), so the real
+        # levers are AO and shadow ray/step counts.
+        scene.eevee.use_gtao = True
+        scene.eevee.gtao_quality = 1.0
+        scene.eevee.gtao_distance = 0.3
+        scene.eevee.use_shadows = True
+        scene.eevee.shadow_ray_count = 3
+        scene.eevee.shadow_step_count = 12
+        scene.eevee.gi_diffuse_bounces = 4
     except Exception:
         pass
     scene.render.resolution_x = resolution[0]
@@ -133,4 +206,29 @@ def render_showcase(filepath, resolution=(3840, 2160), samples=256):
 
     configure_render_settings(resolution=resolution, samples=samples)
     bpy.context.scene.render.filepath = filepath
+    bpy.ops.render.render(write_still=True)
+
+
+def render_interior_view(filepath, resolution=(1920, 1080), samples=128):
+    """Interior-through-glass shots need genuine ray tracing, not EEVEE
+    Next's screen-space transmission. Screen-space methods only reflect/
+    refract data already visible somewhere on screen - a room whose only
+    visibility is through the very window being looked through has no
+    other screen-space data to draw from, so EEVEE Next renders it as an
+    empty pale gradient (confirmed empirically: identical camera and
+    scene, EEVEE Next showed a flat pale wall, Cycles clearly showed the
+    ground-floor interior point light glowing through the glass). Cycles
+    is meaningfully slower (~100s for a 1920x1080/128-sample building in
+    testing, vs ~5s for the same shot in EEVEE) - a deliberate trade for
+    a feature whose entire point is "actually show me the interior",
+    and a lower default resolution than the 4K showcase render to keep
+    the wait reasonable for a single close-up building shot."""
+    import bpy
+
+    scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    scene.cycles.samples = samples
+    scene.render.resolution_x = resolution[0]
+    scene.render.resolution_y = resolution[1]
+    scene.render.filepath = filepath
     bpy.ops.render.render(write_still=True)

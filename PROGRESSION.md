@@ -6,7 +6,57 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.8.0 — Bugfix round: terrain grounding, signage clutter/traffic lights, raytraced glass, 4K defaults (current)
+## v0.8.1 — Street/terrain follow-up, a real interior-view tool, higher render quality (current)
+
+Direct follow-up to v0.8.0's bug list, scoped narrowly per request.
+
+**Streets still clipped into terrain on long runs.** v0.8.0 fixed buildings
+sitting flush on the ground; streets had the same root cause in a
+different shape - `_build_road_strip` built exactly one flat quad per
+edge regardless of length, sampling terrain height only at its 4 corners.
+A 100m+ arterial can have real undulation between those two endpoints
+that never gets sampled, so the strip either clips into a hill or leaves
+a gap over a dip along its length even though both ends match the ground
+exactly. Fixed by chopping any edge longer than 12m into chunks, each
+sampling its own corners - the same reason the terrain mesh itself is a
+fine grid and not one giant quad.
+
+**"How do I render a building's interior?"** - added a real one-click
+answer: a **Render Interior View** button (targets the selected building,
+or the first one found) that frames a camera at the entrance and renders
+through the glass. Getting this to actually show something took two real
+fixes: an occlusion-safe camera placement (a straight-line raycast backs
+the camera off in 1m steps until the entrance isn't blocked by a
+neighboring building across a narrow street - block gaps can be under the
+naive 8m default), and, more fundamentally, discovering that **EEVEE
+Next's screen-space transmission cannot show a room whose only
+visibility is through the very window being looked through** - screen-space
+methods only reflect/refract data already visible somewhere on screen,
+and an interior with no other line of sight has nothing else to draw
+from, so EEVEE rendered a flat, empty-looking wall no matter how the
+camera was aimed. Confirmed by rendering the identical camera and scene
+in Cycles (true ray tracing) - the interior light and furniture read
+clearly. The new button renders with Cycles specifically for this
+reason; slower (roughly a minute or two vs. seconds), but it's the only
+engine that actually delivers what the feature promises.
+
+**4K quality, a second pass.** Beyond the resolution/sample bump already
+in v0.8.0, enabled ambient occlusion (`use_gtao`, quality 1.0) and pushed
+shadow ray/step counts and diffuse GI bounces up - all one-off costs
+worth paying for a hero render, not the live viewport.
+
+**Kleinstadt, seed 7 — a long arterial now follows terrain the whole way, not just at its endpoints:**
+![Street terrain check](docs/progression/v0.8.1-street-terrain-check.png)
+
+**Kleinstadt, seed 7 — Cycles interior view: the ground-floor light and room structure visible through the entrance glass, where EEVEE showed nothing:**
+![Interior view](docs/progression/v0.8.1-interior-view.png)
+
+**Live Blender session — new "Render Interior View (Cycles)" button, building selected:**
+![Blender screenshot](docs/progression/v0.8.1-blender-screenshot.png)
+
+---
+
+## v0.8.0 — Bugfix round: terrain grounding, signage clutter/traffic lights, raytraced glass, 4K defaults
 
 A direct user bug report ("terrain still bugging and overlapping, many signs
 not on the street, cars not aligned, too many street signs and no traffic

@@ -17,6 +17,7 @@ from typing import Dict, List, Tuple
 from .layout import StreetSegment
 
 _SNAP_TOLERANCE = 0.5  # meters; merges near-identical endpoints from overlapping block-perimeter segments
+_MAX_ROAD_SEGMENT_LENGTH = 12.0  # meters; long strips are chopped into chunks this size at most (see _build_road_strip)
 
 STREETS_PREFIX = "ProcgenMaps_Street"
 
@@ -96,25 +97,44 @@ def build_street_meshes(graph: StreetGraph, preset, terrain_params=None, collect
 
 
 def _build_road_strip(name, start, end, width, height_at):
+    """A single quad spanning the whole edge only samples terrain height at
+    its 4 corners - fine for a short block face, but a long arterial can
+    run for 100+ meters, and the terrain can undulate meaningfully between
+    those two endpoints (nothing in between ever gets sampled). The result
+    is a rigid flat plank that clips into hills or leaves a gap over dips
+    along its length, even though its own endpoints match the ground
+    exactly. Chopping into _MAX_ROAD_SEGMENT_LENGTH chunks - each sampling
+    its own corners - makes the strip actually follow the terrain profile,
+    the same reason the terrain mesh itself is a fine grid and not one
+    giant quad."""
     import bpy
     import mathutils
 
     direction = mathutils.Vector((end[0] - start[0], end[1] - start[1]))
-    if direction.length < 1e-6:
+    length = direction.length
+    if length < 1e-6:
         direction = mathutils.Vector((1.0, 0.0))
-    direction.normalize()
+    else:
+        direction.normalize()
     side = mathutils.Vector((-direction.y, direction.x)) * (width / 2.0)
 
-    corners = [
-        (start[0] + side.x, start[1] + side.y),
-        (start[0] - side.x, start[1] - side.y),
-        (end[0] - side.x, end[1] - side.y),
-        (end[0] + side.x, end[1] + side.y),
-    ]
-    verts = [(px, py, height_at(px, py)) for (px, py) in corners]
+    segment_count = max(1, math.ceil(length / _MAX_ROAD_SEGMENT_LENGTH))
+    verts = []
+    faces = []
+    for i in range(segment_count + 1):
+        t = i / segment_count
+        cx = start[0] + (end[0] - start[0]) * t
+        cy = start[1] + (end[1] - start[1]) * t
+        left = (cx + side.x, cy + side.y)
+        right = (cx - side.x, cy - side.y)
+        verts.append((left[0], left[1], height_at(left[0], left[1])))
+        verts.append((right[0], right[1], height_at(right[0], right[1])))
+    for i in range(segment_count):
+        i0 = i * 2
+        faces.append((i0, i0 + 1, i0 + 3, i0 + 2))
 
     mesh = bpy.data.meshes.new(name)
-    mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
+    mesh.from_pydata(verts, [], faces)
     mesh.update(calc_edges=True)
     return bpy.data.objects.new(name, mesh)
 

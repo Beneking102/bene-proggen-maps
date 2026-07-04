@@ -400,6 +400,43 @@ class PROCGEN_OT_render_showcase(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class PROCGEN_OT_render_interior(bpy.types.Operator):
+    bl_idname = "procgen_maps.render_interior"
+    bl_label = "Render Interior View (Cycles)"
+    bl_description = ("Render a close-up through a building's entrance/windows so its furnished "
+                       "ground-floor interior is visible - uses the selected building if one is "
+                       "selected (any object tagged as a building shell), otherwise the first one "
+                       "found. Uses Cycles rather than EEVEE: a room only visible through its own "
+                       "window has no other screen-space data for EEVEE's screen-space transmission "
+                       "to draw from, so it renders as a blank wall - real ray tracing doesn't have "
+                       "that limitation. Cycles is slower (roughly a minute or two)")
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        from ..rendering import showcase
+
+        target = context.active_object
+        if target is None or target.get("procgen_maps_facade_type") is None:
+            target = next((obj for obj in bpy.data.objects if obj.get("procgen_maps_facade_type") is not None), None)
+        if target is None:
+            self.report({'ERROR'}, "No building found - generate a city first (or select a building)")
+            return {'CANCELLED'}
+
+        settings = context.scene.procgen_maps
+        plan = showcase.build_interior_framing(target)
+        showcase.build_showcase_camera(plan)
+        sun_elevation = settings.night_sun_elevation if settings.night_mode else settings.sun_elevation
+        showcase.ensure_showcase_sun(night_mode=settings.night_mode,
+                                      sun_elevation=sun_elevation, sun_rotation=settings.sun_rotation)
+        context.scene.camera = bpy.data.objects.get(showcase.CAMERA_NAME)
+
+        filepath = _resolve_export_path(context, "procgen_maps_interior.png")
+        showcase.render_interior_view(filepath)
+
+        self.report({'INFO'}, f"Interior view of {target.name} saved to {filepath} (this took a while - Cycles)")
+        return {'FINISHED'}
+
+
 classes = (
     PROCGEN_OT_generate_terrain,
     PROCGEN_OT_generate_city,
@@ -410,6 +447,7 @@ classes = (
     PROCGEN_OT_export_svg,
     PROCGEN_OT_export_json,
     PROCGEN_OT_render_showcase,
+    PROCGEN_OT_render_interior,
 )
 
 

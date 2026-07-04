@@ -71,6 +71,9 @@ class PROCGEN_PT_showcase_panel(bpy.types.Panel):
         row.prop(settings, "showcase_width")
         row.prop(settings, "showcase_height")
         layout.operator("procgen_maps.render_showcase")
+        layout.separator()
+        layout.operator("procgen_maps.render_interior")
+        layout.label(text="Select a building first to target it", icon='INFO')
 
 
 class PROCGEN_PT_lighting_panel(bpy.types.Panel):
