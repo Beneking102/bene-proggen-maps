@@ -162,7 +162,17 @@ def _switch_viewport_to_material_preview(context):
     """Blender's default 'Solid' viewport shading ignores shader node graphs
     entirely (it only reads material.diffuse_color) - switch to 'Material
     Preview' so generated buildings/terrain/props show their real colors
-    without the user needing to know that Blender-specific quirk."""
+    without the user needing to know that Blender-specific quirk.
+
+    Material Preview's own default lighting is a generic bundled studio
+    HDRI, not this scene's actual Nishita sky world - the facade/terrain
+    materials' subtle noise-driven grain and bump (materials/city_mat.py,
+    terrain_mat.py) were tuned to look right under real sunlight, and can
+    read as harsh/blotchy dark mottling under that mismatched default
+    preview lighting even though the same materials render correctly
+    (confirmed via every render in this project) once real scene lighting
+    is used. use_scene_world makes the viewport preview actually use the
+    Nishita sky this addon sets up, so what's on screen matches renders."""
     window = context.window
     if window is None or window.screen is None:
         return
@@ -171,6 +181,7 @@ def _switch_viewport_to_material_preview(context):
             for space in area.spaces:
                 if space.type == 'VIEW_3D':
                     space.shading.type = 'MATERIAL'
+                    space.shading.use_scene_world = True
 
 
 def _enable_high_quality_rendering(context):
