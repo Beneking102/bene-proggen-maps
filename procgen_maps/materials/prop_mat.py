@@ -26,6 +26,10 @@ _COLORS = {
     "furniture_crate": (0.62, 0.48, 0.30, 1.0),
     "interior_floor": (0.55, 0.48, 0.40, 1.0),
     "interior_ceiling": (0.85, 0.84, 0.80, 1.0),
+    "fountain_stone": (0.62, 0.60, 0.55, 1.0),
+    "fountain_water": (0.16, 0.42, 0.52, 1.0),
+    "parking_asphalt": (0.08, 0.08, 0.09, 1.0),
+    "parking_line": (0.85, 0.85, 0.78, 1.0),
 }
 
 _ROUGHNESS_OVERRIDES = {
@@ -33,6 +37,9 @@ _ROUGHNESS_OVERRIDES = {
     "lamp_head": 0.4,
     "furniture_metal": 0.3,
     "interior_floor": 0.6,
+    "fountain_water": 0.12,
+    "parking_asphalt": 0.9,
+    "parking_line": 0.6,
 }
 
 

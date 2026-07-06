@@ -6,7 +6,78 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.8.1 — Street/terrain follow-up, a real interior-view tool, higher render quality (current)
+## v0.9.0 — Dungeon interiors, park/parking vibrancy, driver-based animation (current)
+
+Scoped from the user's list after v0.8.1 shipped: "improve the dungeon, make
+animation and better tree / terrain and fountain, park, parking spaces, less
+cars to make it more vibrant and more."
+
+**Dungeon rooms were open-topped, unmaterialed shells with corridors
+dead-ending against solid walls.** `generators/dungeon.py` built only a
+floor + 4 flat walls per room - no ceiling, no doorway where a corridor
+actually connects, no materials, no lighting. Rewritten so every corridor
+segment's start-or-end point is exactly some room's own `.center` (true by
+construction of `connect()`), which means the wall a corridor exits
+through - and where along it - can be read directly off that segment's own
+direction, no geometric intersection test needed. `_find_doorways` +
+`_wall_segments_with_gaps` use this to cut real gaps in the walls; rooms
+now get floor + ceiling + 4 walls-with-doorways across 3 material slots
+(new `materials/dungeon_mat.py`), the largest room is tinted as the "boss"
+room and the smallest as the "start" room, and a torch (bracket mesh +
+warm point light) lights every doorway.
+
+**Tree canopies were only ever a plain cone or a plain sphere.** Added a
+third "cluster" shape - 3 overlapping icospheres at different sizes/offsets
+- cycled across the 12 tree variants alongside the existing two, so a
+street doesn't read as identical balls-on-sticks.
+
+**Parks had trees and benches but no centerpiece.** Large park blocks
+(>= 400 sqm) now get a fountain (stone base, a tinted water ring, a
+central pillar) placed before the tree/bench scatter, so those naturally
+avoid overlapping it via the same collision grid every other prop uses.
+
+**Supermarkets had no parking, and every local street was lined bumper to
+bumper with cars.** Supermarket footprint shrink dropped from 0.92 to 0.55
+- shrinking a block-centered footprint frees an equal margin on all 4
+sides, and the entrance-facing margin now becomes a real parking lot (new
+`generators/city/parking.py`): a terrain-following asphalt pad, painted
+stall-divider lines, and a grid of parked cars in one or two rows with a
+drive aisle. Roadside car spacing widened from 6m to 10m so cars read as
+parked, not welded together - parking lots pick up the slack for a livelier
+feel overall.
+
+**Static cities felt static.** Added lightweight, keyframe-free animation
+via Blender's driver expressions (`sin(frame*freq+phase)*amplitude` -
+`frame` is available directly in a scripted driver's expression namespace,
+no variable needed, confirmed by direct test): every tree Empty gets a
+subtle back-and-forth sway on its own X/Y rotation, frequency/phase/
+amplitude seeded from its own location so a row of trees doesn't sway in
+lockstep. Lit building windows (`materials/city_mat.py`) get a slow
+sine-driven emission pulse layered on top of the existing night-mode
+emission strength, phased per-building using each building's own
+`procgen_maps_tint` attribute (already computed for facade-color
+variation) - one shared material, one driver, no per-window objects
+needed, verified by checking the driven node's evaluated value and the
+actual rendered pixel brightness both change across frames.
+
+**Kleinstadt/Metropole, various seeds — a fully enclosed dungeon room with a doorway cut into the wall, a torch lighting it, and the boss room's warm floor tint:**
+![Dungeon interior](docs/progression/v0.9.0-dungeon-interior.png)
+
+**Top-down check of a full BSP layout — every room now has a ceiling and real doorway gaps instead of solid walls:**
+![Dungeon overview](docs/progression/v0.9.0-dungeon-overview.png)
+
+**Metropole, seed 12 — a supermarket's new parking lot (two rows, painted stalls, drive aisle) plus a cluster-canopy tree in the background:**
+![Parking lot](docs/progression/v0.9.0-parking-lot.png)
+
+**Metropole, seed 12 — the new park fountain centerpiece:**
+![Fountain](docs/progression/v0.9.0-fountain.png)
+
+**Kleinstadt, seed 4 — the new 3-lobe "cluster" tree canopy shape, close up:**
+![Cluster tree canopy](docs/progression/v0.9.0-tree-cluster.png)
+
+---
+
+## v0.8.1 — Street/terrain follow-up, a real interior-view tool, higher render quality
 
 Direct follow-up to v0.8.0's bug list, scoped narrowly per request.
 

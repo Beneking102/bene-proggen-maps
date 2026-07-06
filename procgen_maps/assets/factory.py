@@ -8,10 +8,15 @@ re-points already-spawned Empties at a different detail's source collection
 based on distance from the camera; the geometry for every detail level is
 built once and cached, so LOD switching never rebuilds meshes.
 """
+import random
+
 from . import library
 from ..materials import prop_mat
 
 _source_collection_cache = {}  # (asset_id, detail) -> bpy.types.Collection (never linked into the scene)
+
+_TREE_SWAY_FREQ_RANGE = (0.02, 0.04)       # radians/frame; a full cycle every ~150-300 frames
+_TREE_SWAY_AMPLITUDE_RANGE = (0.012, 0.027)  # radians; ~0.7-1.5 degrees, subtle rather than cartoonish
 
 
 def spawn(asset_id: str, location, rotation_z: float = 0.0, scale: float = 1.0,
@@ -32,7 +37,30 @@ def spawn(asset_id: str, location, rotation_z: float = 0.0, scale: float = 1.0,
 
     target = collection if collection is not None else bpy.context.scene.collection
     target.objects.link(empty)
+
+    if library.get_asset(asset_id).category == "tree":
+        _add_tree_sway_drivers(empty)
+
     return empty
+
+
+def _add_tree_sway_drivers(empty):
+    """A subtle, driver-based back-and-forth sway on the Empty's own X/Y
+    rotation (Z is left alone - that's the placement yaw set in `spawn`) -
+    no keyframes, so it costs nothing to generate for thousands of trees.
+    Each tree's own (rounded, so still deterministic for a given layout)
+    location seeds its own frequency/phase/amplitude, so a row of trees
+    sways out of sync with its neighbors instead of like one rigid grid."""
+    seed = hash((round(empty.location[0], 3), round(empty.location[1], 3))) & 0xFFFFFFFF
+    rng = random.Random(seed)
+
+    for axis_index in (0, 1):
+        freq = rng.uniform(*_TREE_SWAY_FREQ_RANGE)
+        amplitude = rng.uniform(*_TREE_SWAY_AMPLITUDE_RANGE)
+        phase = rng.uniform(0.0, 6.2831853)
+        fcurve = empty.driver_add("rotation_euler", axis_index)
+        fcurve.driver.type = 'SCRIPTED'
+        fcurve.driver.expression = f"sin(frame*{freq:.5f}+{phase:.5f})*{amplitude:.5f}"
 
 
 def update_lod(empties, camera_location, high_distance, medium_distance):
@@ -91,6 +119,8 @@ _PART_MATERIALS_BY_KIND = {
     "car": ("car",),
     "sign": ("sign_pole", "sign_board"),
     "rooftop_unit": ("rooftop_unit",),
+    "fountain": ("fountain_stone", "fountain_water"),
+    "parking_lot": ("parking_asphalt", "parking_line"),
     "bed": ("furniture_soft",),
     "table": ("furniture_wood",),
     "chair": ("furniture_wood",),
@@ -114,9 +144,24 @@ def _build_primitive_mesh(name: str, params: dict):
         part_faces.append((0, _add_cone(bm, params["trunk_radius"], params["trunk_radius"], params["height"] * 0.4,
                                          max(4, params["segments"] // 2), z_offset=params["height"] * 0.2)))
         canopy_z = params["height"] * 0.55
-        if params["canopy_shape"] == "sphere":
+        canopy_shape = params["canopy_shape"]
+        if canopy_shape == "sphere":
             part_faces.append((1, _add_icosphere(bm, params["canopy_radius"], 1,
                                                   z_offset=canopy_z + params["canopy_radius"] * 0.6)))
+        elif canopy_shape == "cluster":
+            # 3 overlapping icospheres of different size/offset instead of one
+            # perfect sphere - a cheap way to break up the silhouette so a
+            # row of trees doesn't read as identical balls-on-sticks.
+            r = params["canopy_radius"]
+            lobes = [
+                (0.0, 0.0, r * 0.85, canopy_z + r * 0.55),
+                (r * 0.5, r * 0.35, r * 0.6, canopy_z + r * 0.35),
+                (-r * 0.45, -r * 0.4, r * 0.55, canopy_z + r * 0.3),
+            ]
+            faces = []
+            for dx, dy, lobe_radius, lobe_z in lobes:
+                faces.extend(_add_icosphere(bm, lobe_radius, 1, x_offset=dx, y_offset=dy, z_offset=lobe_z))
+            part_faces.append((1, faces))
         else:
             part_faces.append((1, _add_cone(bm, params["canopy_radius"], 0.0, params["height"] * 0.6,
                                              params["segments"], z_offset=canopy_z)))
@@ -148,6 +193,19 @@ def _build_primitive_mesh(name: str, params: dict):
     elif kind == "rooftop_unit":
         part_faces.append((0, _add_cube(bm, (params["width"], params["depth"], params["height"]),
                                          z_offset=params["height"] / 2.0)))
+
+    elif kind == "fountain":
+        base_r = params["base_radius"]
+        base_h = params["base_height"]
+        segments = params["segments"]
+        part_faces.append((0, _add_cone(bm, base_r, base_r, base_h, segments, z_offset=base_h / 2.0)))
+        part_faces.append((1, _add_cone(bm, base_r * 0.82, base_r * 0.82, 0.06, segments,
+                                         z_offset=base_h + 0.03)))
+        part_faces.append((0, _add_cone(bm, params["pillar_radius"], params["pillar_radius"] * 0.7,
+                                         params["pillar_height"], max(6, segments),
+                                         z_offset=base_h + params["pillar_height"] / 2.0)))
+        part_faces.append((0, _add_icosphere(bm, params["pillar_radius"] * 1.3, 1,
+                                              z_offset=base_h + params["pillar_height"])))
 
     elif kind == "bed":
         part_faces.append((0, _add_cube(bm, (params["width"], params["length"], params["height"] * 0.4),
@@ -220,13 +278,13 @@ def _add_cone(bm, radius1, radius2, depth, segments, z_offset=0.0):
     return list(bm.faces[before:])
 
 
-def _add_icosphere(bm, radius, subdivisions, z_offset=0.0):
+def _add_icosphere(bm, radius, subdivisions, z_offset=0.0, x_offset=0.0, y_offset=0.0):
     import bmesh
     from mathutils import Matrix
 
     before = len(bm.faces)
     bmesh.ops.create_icosphere(bm, subdivisions=subdivisions, radius=radius,
-                                matrix=Matrix.Translation((0, 0, z_offset)), calc_uvs=True)
+                                matrix=Matrix.Translation((x_offset, y_offset, z_offset)), calc_uvs=True)
     bm.faces.ensure_lookup_table()
     return list(bm.faces[before:])
 

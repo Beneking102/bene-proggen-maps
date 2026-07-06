@@ -45,7 +45,11 @@ SPECIAL_BUILDING_SPECS: Tuple[SpecialBuildingSpec, ...] = (
     SpecialBuildingSpec(
         facade=FacadeType("supermarket", ("commercial",), 0.35, 4.0, "flat", 12),
         sign_text="SUPERMARKET", sign_color=(1.0, 0.55, 0.05, 1.0),
-        floors=1, floor_height=5.5, footprint_shrink=0.92, min_blocks_required=6, count_formula="scaled",
+        # Smaller than the other specials' ~0.9 on purpose: shrinking the
+        # footprint frees an equal margin on all 4 sides of the block, and
+        # parking.py's plan_parking_lots_for_supermarkets turns the front
+        # (-Y, entrance-facing) margin into a parking lot.
+        floors=1, floor_height=5.5, footprint_shrink=0.55, min_blocks_required=6, count_formula="scaled",
     ),
     SpecialBuildingSpec(
         facade=FacadeType("police_station", ("commercial", "residential"), 0.5, 3.2, "flat", 13),

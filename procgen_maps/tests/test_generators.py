@@ -6,8 +6,14 @@ import pytest
 
 from procgen_maps.assets.library import ASSET_DEFS
 from procgen_maps.config.presets import PRESETS
-from procgen_maps.generators.city.buildings import plan_buildings
+from procgen_maps.generators.city.buildings import BuildingPlan, FacadeType, plan_buildings
 from procgen_maps.generators.city.layout import Block, generate_layout
+from procgen_maps.generators.city.parking import (
+    ParkingLotSpec,
+    plan_parking_lines,
+    plan_parking_lots_for_supermarkets,
+    plan_parking_stalls,
+)
 from procgen_maps.generators.city.props import plan_props
 from procgen_maps.generators.city import signage
 from procgen_maps.generators.city.signage import plan_signage
@@ -17,7 +23,14 @@ from procgen_maps.generators.city.special_buildings import (
 )
 from procgen_maps.generators.city.streets import StreetGraph, build_street_graph
 from procgen_maps.generators.city.zones import classify_zones
-from procgen_maps.generators.dungeon import DungeonParams, generate_dungeon
+from procgen_maps.generators.dungeon import (
+    Corridor,
+    DungeonParams,
+    Room,
+    _find_doorways,
+    _wall_segments_with_gaps,
+    generate_dungeon,
+)
 from procgen_maps.generators.terrain import TerrainParams, generate_heightmap, sample_world_height
 from procgen_maps.utils.math_helpers import clamp, lerp, remap, smoothstep
 from procgen_maps.utils.noise import fbm, fbm_heightmap, value_noise_2d
@@ -506,3 +519,114 @@ def test_generate_dungeon_is_deterministic():
     layout_a = generate_dungeon(DungeonParams(seed=3))
     layout_b = generate_dungeon(DungeonParams(seed=3))
     assert len(layout_a.rooms) == len(layout_b.rooms)
+
+
+def test_find_doorways_detects_wall_and_position_for_each_direction():
+    room = Room(id=0, x=0.0, y=0.0, width=10.0, height=8.0)  # center = (5, 4)
+    corridors = [
+        Corridor(id=0, start=(5.0, 4.0), end=(20.0, 4.0), width=1.6),   # exits east
+        Corridor(id=1, start=(-20.0, 4.0), end=(5.0, 4.0), width=1.6),  # exits west (touches at .end)
+        Corridor(id=2, start=(5.0, 4.0), end=(5.0, 30.0), width=1.6),   # exits north
+        Corridor(id=3, start=(5.0, -30.0), end=(5.0, 4.0), width=1.6),  # exits south (touches at .end)
+    ]
+    doorways = _find_doorways(room, corridors)
+    walls_and_positions = {(wall, position) for wall, position, _half_width in doorways}
+    assert walls_and_positions == {("east", 4.0), ("west", 4.0), ("north", 5.0), ("south", 5.0)}
+    for _wall, _position, half_width in doorways:
+        assert half_width > 1.6 / 2.0  # wider than the bare corridor, for a clean gap
+
+
+def test_find_doorways_ignores_corridors_not_touching_the_room():
+    room = Room(id=0, x=0.0, y=0.0, width=10.0, height=8.0)
+    unrelated = Corridor(id=0, start=(100.0, 100.0), end=(120.0, 100.0), width=1.6)
+    assert _find_doorways(room, [unrelated]) == []
+
+
+def test_wall_segments_with_gaps_returns_full_span_when_no_gaps():
+    assert _wall_segments_with_gaps(0.0, 10.0, []) == [(0.0, 10.0)]
+
+
+def test_wall_segments_with_gaps_cuts_a_hole_in_the_middle():
+    segments = _wall_segments_with_gaps(0.0, 10.0, [(5.0, 1.0)])
+    assert segments == [(0.0, 4.0), (6.0, 10.0)]
+
+
+def test_wall_segments_with_gaps_merges_overlapping_gaps():
+    segments = _wall_segments_with_gaps(0.0, 10.0, [(3.0, 2.0), (4.0, 2.0)])
+    assert segments == [(0.0, 1.0), (6.0, 10.0)]
+
+
+def test_wall_segments_with_gaps_clips_gaps_to_the_wall_span():
+    segments = _wall_segments_with_gaps(0.0, 10.0, [(0.0, 1.0)])
+    assert segments == [(1.0, 10.0)]
+
+
+_SUPERMARKET_FACADE = FacadeType("supermarket", ("commercial",), 0.35, 4.0, "flat", 12)
+_POLICE_FACADE = FacadeType("police_station", ("commercial", "residential"), 0.5, 3.2, "flat", 13)
+
+
+def _supermarket_plan(block: Block, shrink: float) -> BuildingPlan:
+    cx, cy = block.center
+    hw = block.half_size[0] * shrink
+    hh = block.half_size[1] * shrink
+    footprint = [(cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)]
+    return BuildingPlan(block.id, footprint, 1, 5.5, _SUPERMARKET_FACADE, 0.5)
+
+
+def test_plan_parking_lots_for_supermarkets_finds_freed_space_in_front():
+    block = Block(id=0, center=(0.0, 0.0), half_size=(20.0, 20.0))
+    plan = _supermarket_plan(block, shrink=0.55)
+
+    specs = plan_parking_lots_for_supermarkets([block], [plan])
+
+    assert len(specs) == 1
+    spec = specs[0]
+    assert spec.cx == pytest.approx(0.0)
+    assert spec.cy == pytest.approx(-15.5)
+    assert spec.half_depth == pytest.approx(4.5)
+    assert spec.half_width == pytest.approx(9.9)
+
+
+def test_plan_parking_lots_for_supermarkets_ignores_other_facades():
+    block = Block(id=0, center=(0.0, 0.0), half_size=(20.0, 20.0))
+    footprint = [(-11.0, -11.0), (11.0, -11.0), (11.0, 11.0), (-11.0, 11.0)]
+    plan = BuildingPlan(block.id, footprint, 2, 3.4, _POLICE_FACADE, 0.5)
+
+    assert plan_parking_lots_for_supermarkets([block], [plan]) == []
+
+
+def test_plan_parking_lots_for_supermarkets_skips_shallow_gaps():
+    block = Block(id=0, center=(0.0, 0.0), half_size=(20.0, 20.0))
+    plan = _supermarket_plan(block, shrink=0.97)  # freed depth well under _MIN_FREED_DEPTH
+
+    assert plan_parking_lots_for_supermarkets([block], [plan]) == []
+
+
+def test_plan_parking_stalls_stay_within_lot_bounds_and_face_perpendicular():
+    spec = ParkingLotSpec(block_id=0, cx=0.0, cy=0.0, half_width=15.0, half_depth=3.0)
+    stalls = plan_parking_stalls(spec)
+
+    assert stalls
+    for stall in stalls:
+        assert -15.0 <= stall.x <= 15.0
+        assert -3.0 <= stall.y <= 3.0
+        assert stall.rotation_z == pytest.approx(math.pi / 2.0)
+
+
+def test_plan_parking_stalls_uses_two_rows_for_a_deep_lot():
+    shallow = ParkingLotSpec(block_id=0, cx=0.0, cy=0.0, half_width=15.0, half_depth=3.0)
+    deep = ParkingLotSpec(block_id=0, cx=0.0, cy=0.0, half_width=15.0, half_depth=8.0)
+
+    shallow_rows = {round(s.y, 3) for s in plan_parking_stalls(shallow)}
+    deep_rows = {round(s.y, 3) for s in plan_parking_stalls(deep)}
+
+    assert len(shallow_rows) == 1
+    assert len(deep_rows) == 2
+
+
+def test_plan_parking_lines_has_one_more_line_than_stalls_per_row():
+    spec = ParkingLotSpec(block_id=0, cx=0.0, cy=0.0, half_width=15.0, half_depth=3.0)
+    stalls = plan_parking_stalls(spec)
+    lines = plan_parking_lines(spec)
+
+    assert len(lines) == len(stalls) + 1

@@ -4,7 +4,7 @@ No bpy.types classes live in this package (operators live in ui/operators.py);
 register()/unregister() are no-ops kept for the subpackage registration
 contract used by procgen_maps/generators/__init__.py.
 """
-from . import buildings, layout, props, signage, special_buildings, streets, zones  # noqa: F401
+from . import buildings, layout, parking, props, signage, special_buildings, streets, zones  # noqa: F401
 
 CITY_ROOT_COLLECTION_NAME = "ProcgenMaps_City"
 
@@ -33,6 +33,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         city_layout.blocks, zone_by_block, preset, seed=seed)
     regular_blocks = [b for b in city_layout.blocks if b.id not in reserved_block_ids]
     building_plans = buildings.plan_buildings(regular_blocks, zone_by_block, preset, seed=seed)
+    parking_lot_specs = parking.plan_parking_lots_for_supermarkets(city_layout.blocks, special_plans)
 
     prop_placements = props.plan_props(street_graph, city_layout.blocks, zone_by_block, preset, seed=seed,
                                         terrain_params=terrain_params,
@@ -51,6 +52,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     buildings_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Buildings", root)
     props_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Props", root)
     signage_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Signage", root)
+    parking_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Parking", root)
 
     street_objects = streets.build_street_meshes(street_graph, preset, terrain_params, collection=streets_coll)
     building_objects, building_extra_objects = buildings.build_building_meshes(
@@ -59,6 +61,9 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         special_plans, terrain_params, collection=buildings_coll)
     prop_objects = props.build_props(prop_placements, collection=props_coll)
     sign_objects = signage.build_signage_meshes(sign_placements, collection=signage_coll)
+    parking_objects = []
+    for spec in parking_lot_specs:
+        parking_objects.extend(parking.build_parking_lot(spec, terrain_params, collection=parking_coll))
 
     return {
         "root_collection": root,
@@ -69,6 +74,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         "special_building_plans": special_plans,
         "prop_placements": prop_placements,
         "sign_placements": sign_placements,
+        "parking_lot_specs": parking_lot_specs,
         "street_objects": street_objects,
         # Special buildings merged into the same keys as the 12 generic
         # facades: they share the exact same mesh/material shape (see
@@ -78,6 +84,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         "building_extra_objects": building_extra_objects + special_extra_objects,
         "prop_objects": prop_objects,
         "sign_objects": sign_objects,
+        "parking_objects": parking_objects,
     }
 
 

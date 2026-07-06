@@ -22,8 +22,9 @@ PROPS_COLLECTION_NAME = "ProcgenMaps_Props"
 _LAMP_SPACING = 25.0
 _TREE_STREET_SPACING = 18.0
 _PARK_TREE_DENSITY = 0.02        # trees per square meter of park block area
-_CAR_SPACING = 6.0
+_CAR_SPACING = 10.0
 _SIGN_CHANCE_AT_SHOPFRONT = 0.6
+_PARK_FOUNTAIN_MIN_AREA = 400.0  # sq meters; smaller parks get benches/trees only, no centerpiece
 
 
 @dataclass
@@ -112,6 +113,9 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         hw, hh = block.half_size
 
         if zone == "park":
+            if block.area >= _PARK_FOUNTAIN_MIN_AREA:
+                try_place("fountain", cx, cy)
+
             n_trees = max(1, int(block.area * _PARK_TREE_DENSITY * density))
             for _ in range(n_trees):
                 x, y = cx + rng.uniform(-hw, hw), cy + rng.uniform(-hh, hh)

@@ -59,6 +59,11 @@ def _rooftop_unit_builder(detail: str):
     return {"kind": "rooftop_unit", "width": 1.6, "depth": 1.2, "height": 0.9}
 
 
+def _fountain_builder(detail: str):
+    return {"kind": "fountain", "base_radius": 2.2, "base_height": 0.5,
+            "pillar_radius": 0.35, "pillar_height": 1.6, "segments": _SEGMENTS_BY_DETAIL[detail]}
+
+
 def _bed_builder(detail: str):
     return {"kind": "bed", "width": 1.4, "length": 2.0, "height": 0.55}
 
@@ -94,6 +99,8 @@ def _machinery_builder(detail: str):
 
 ASSET_DEFS: Dict[str, AssetDef] = {}
 
+_CANOPY_SHAPES = ("cone", "cluster", "sphere")  # cycled across the 12 variants for visual variety
+
 for _i in range(1, 13):
     _asset_id = f"tree_{_i:02d}"
     ASSET_DEFS[_asset_id] = AssetDef(
@@ -104,7 +111,7 @@ for _i in range(1, 13):
             trunk_radius=0.15 + (_i % 4) * 0.03,
             canopy_radius=1.0 + (_i % 5) * 0.25,
             height=3.5 + (_i % 6) * 0.8,
-            canopy_shape="sphere" if _i % 3 == 0 else "cone",
+            canopy_shape=_CANOPY_SHAPES[_i % 3],
         ),
     )
 
@@ -113,6 +120,7 @@ ASSET_DEFS["bench"] = AssetDef("bench", "bench", footprint_radius=0.9, builder=_
 ASSET_DEFS["parked_car"] = AssetDef("parked_car", "car", footprint_radius=2.4, builder=_car_builder)
 ASSET_DEFS["sign"] = AssetDef("sign", "sign", footprint_radius=0.5, builder=_sign_builder)
 ASSET_DEFS["rooftop_unit"] = AssetDef("rooftop_unit", "rooftop", footprint_radius=1.0, builder=_rooftop_unit_builder)
+ASSET_DEFS["fountain"] = AssetDef("fountain", "landmark", footprint_radius=2.6, builder=_fountain_builder)
 
 ASSET_DEFS["furniture_bed"] = AssetDef("furniture_bed", "furniture", footprint_radius=1.2, builder=_bed_builder)
 ASSET_DEFS["furniture_table"] = AssetDef("furniture_table", "furniture", footprint_radius=0.8, builder=_table_builder)

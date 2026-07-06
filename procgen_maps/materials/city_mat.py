@@ -26,6 +26,9 @@ both pure shading tricks, no extra geometry or texture files needed.
 CITY_MATERIAL_NAME = "ProcgenMaps_CityFacade"
 WINDOW_MATERIAL_NAME = "ProcgenMaps_CityWindow"
 NIGHT_MODE_NODE_NAME = "ProcgenMaps_NightModeFactor"
+NIGHT_PULSE_NODE_NAME = "ProcgenMaps_NightPulseTime"
+_NIGHT_PULSE_SPEED = 0.045       # radians/frame fed into the pulse sine, independent of set_night_mode's own value
+_NIGHT_PULSE_RANGE = (0.6, 1.4)  # emission multiplier range - dips and rises around the base strength, never off
 
 _FACADE_COLORS = (
     (0.55, 0.75, 0.85, 1.0),  # glass_tower
@@ -190,11 +193,62 @@ def get_or_create_window_material():
     links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
     night_value = nodes.new("ShaderNodeValue")
-    night_value.location = (-200, -200)
+    night_value.location = (-700, -200)
     night_value.name = NIGHT_MODE_NODE_NAME
     night_value.label = "Night Mode"
     night_value.outputs[0].default_value = 0.0
-    links.new(night_value.outputs["Value"], bsdf.inputs["Emission Strength"])
+
+    # A slow sine "pulse" multiplied into the night-mode emission strength,
+    # so lit windows breathe gently rather than holding one flat glow.
+    # Phase comes from each building's own procgen_maps_tint attribute
+    # (already set per-object in buildings.py for the facade-color
+    # variation above) purely as a convenient, already-existing per-object
+    # random seed - so buildings pulse out of phase with each other using
+    # one shared material and a single driver, not one driver per window.
+    pulse_time = nodes.new("ShaderNodeValue")
+    pulse_time.location = (-700, -350)
+    pulse_time.name = NIGHT_PULSE_NODE_NAME
+    pulse_time.label = "Night Pulse Time"
+    fcurve = pulse_time.outputs[0].driver_add("default_value")
+    fcurve.driver.type = 'SCRIPTED'
+    fcurve.driver.expression = f"frame*{_NIGHT_PULSE_SPEED}"
+
+    pulse_phase_attr = nodes.new("ShaderNodeAttribute")
+    pulse_phase_attr.location = (-700, -500)
+    pulse_phase_attr.attribute_type = 'OBJECT'
+    pulse_phase_attr.attribute_name = "procgen_maps_tint"
+
+    pulse_phase = nodes.new("ShaderNodeMath")
+    pulse_phase.location = (-500, -500)
+    pulse_phase.operation = 'MULTIPLY'
+    pulse_phase.inputs[1].default_value = 6.2831853
+    links.new(pulse_phase_attr.outputs["Fac"], pulse_phase.inputs[0])
+
+    pulse_input = nodes.new("ShaderNodeMath")
+    pulse_input.location = (-500, -350)
+    pulse_input.operation = 'ADD'
+    links.new(pulse_time.outputs["Value"], pulse_input.inputs[0])
+    links.new(pulse_phase.outputs["Value"], pulse_input.inputs[1])
+
+    pulse_sine = nodes.new("ShaderNodeMath")
+    pulse_sine.location = (-300, -350)
+    pulse_sine.operation = 'SINE'
+    links.new(pulse_input.outputs["Value"], pulse_sine.inputs[0])
+
+    pulse_factor = nodes.new("ShaderNodeMapRange")
+    pulse_factor.location = (-100, -350)
+    pulse_factor.inputs["From Min"].default_value = -1.0
+    pulse_factor.inputs["From Max"].default_value = 1.0
+    pulse_factor.inputs["To Min"].default_value = _NIGHT_PULSE_RANGE[0]
+    pulse_factor.inputs["To Max"].default_value = _NIGHT_PULSE_RANGE[1]
+    links.new(pulse_sine.outputs["Value"], pulse_factor.inputs["Value"])
+
+    emission_strength = nodes.new("ShaderNodeMath")
+    emission_strength.location = (100, -200)
+    emission_strength.operation = 'MULTIPLY'
+    links.new(night_value.outputs["Value"], emission_strength.inputs[0])
+    links.new(pulse_factor.outputs["Result"], emission_strength.inputs[1])
+    links.new(emission_strength.outputs["Value"], bsdf.inputs["Emission Strength"])
 
     return mat
 
