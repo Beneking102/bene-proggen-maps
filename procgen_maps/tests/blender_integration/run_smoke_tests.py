@@ -129,6 +129,12 @@ def main():
         bpy.ops.procgen_maps.generate_terrain()
         bpy.ops.procgen_maps.generate_city()
 
+    def terrain_under_roads():
+        from procgen_maps import validation
+
+        above, checked = validation.terrain_above_roads()
+        _check(f"no terrain vertex above a street surface ({len(above)} of {checked})", checked > 0 and not above)
+
     def validate_map():
         result = bpy.ops.procgen_maps.validate_map()
         _check("validate_map FINISHED", result == {'FINISHED'})
@@ -141,6 +147,7 @@ def main():
     _run_stage("Toggle night mode", night_mode)
     _run_stage("Regenerate without leaks", regenerate_without_leaks)
     _run_stage("Terrain reset on city regenerate", terrain_reset_on_city_regenerate)
+    _run_stage("Terrain stays under the roads", terrain_under_roads)
     _run_stage("Validate map", validate_map)
 
     with tempfile.TemporaryDirectory(prefix="procgen_maps_smoke_") as tmp_dir:

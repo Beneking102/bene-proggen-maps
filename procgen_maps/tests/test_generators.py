@@ -917,3 +917,63 @@ def test_window_mask_is_deterministic_and_respects_frequency_extremes():
     assert window_mask(detail_rng(3, "windows"), 20, 1.0) == [True] * 20
     assert window_mask(detail_rng(3, "windows"), 20, 0.0) == [False] * 20
     assert len(window_mask(detail_rng(3, "windows"), 0, 0.5)) == 0
+
+
+def test_lower_terrain_under_corridors_sinks_the_road_bed_once():
+    """v0.12.0: the terrain mesh is sunk under every street footprint so it
+    cannot poke through the asphalt (the mesh interpolates linearly between
+    ~2 m grid vertices, the roads sample the continuous field). Overlapping
+    shapes lower by the maximum, never the sum."""
+    from procgen_maps.generators import terrain as terrain_gen
+
+    class _Verts:
+        def __init__(self, coords):
+            self._coords = coords
+
+        def __len__(self):
+            return len(self._coords) // 3
+
+        def foreach_get(self, _attr, buffer):
+            buffer[:] = self._coords
+
+        def foreach_set(self, _attr, buffer):
+            self._coords[:] = buffer
+
+    class _Mesh:
+        def __init__(self, coords):
+            self.vertices = _Verts(coords)
+
+        def update(self):
+            pass
+
+    class _Obj:
+        def __init__(self, mesh):
+            self.data = mesh
+
+    params = terrain_gen.TerrainParams(resolution=21, world_size=40.0, max_height=0.0, seed=1)
+    res = params.resolution
+    step = params.world_size / (res - 1)
+    center = res // 2
+    coords = np.zeros((res, res, 3), dtype=np.float32)
+    coords[..., 0] = (-20.0 + np.arange(res) * step)[None, :]
+    coords[..., 1] = (-20.0 + np.arange(res) * step)[:, None]
+    # max_height=0: the raw heightfield is flat at 0. One in-corridor vertex
+    # was lifted by a building pad, one already lies below the bed.
+    coords[center, 3, 2] = 1.0
+    coords[center, 5, 2] = -1.0
+    obj = _Obj(_Mesh(coords.ravel().copy()))
+
+    # Two corridors crossing at the origin plus a disc there.
+    inside = terrain_gen.lower_terrain_under_corridors(
+        obj, params, [(-20.0, 0.0, 20.0, 0.0, 3.0), (0.0, -20.0, 0.0, 20.0, 3.0)], [(0.0, 0.0, 4.0)],
+        depth=0.4, margin=2.0)
+    assert inside > 0
+    after = obj.data.vertices._coords.reshape(res, res, 3)[..., 2]
+    assert after[center, center] == pytest.approx(-0.4)          # crossing: lowered once, not twice
+    assert after[center, 2] == pytest.approx(-0.4)               # inside the corridor along x
+    assert after[center + 1, 2] == pytest.approx(-0.4)           # 2 m off-center, still inside half_width 3
+    assert after[center + 2, 2] == pytest.approx(-0.4 * 0.5)     # 4 m: 1 m into the 2 m blend
+    assert after[center + 4, 2] == pytest.approx(0.0)            # 8 m: untouched
+    assert after[0, 0] == pytest.approx(0.0)
+    assert after[center, 3] == pytest.approx(-0.4)               # pad-lifted vertex pulled down to the bed
+    assert after[center, 5] == pytest.approx(-1.0)               # already below the bed: left alone

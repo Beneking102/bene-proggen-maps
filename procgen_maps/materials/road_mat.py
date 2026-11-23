@@ -14,9 +14,9 @@ texture files, no per-object material copies:
   the strip's start/end node, already minus the intersection fan radius,
   or a large sentinel for ends that are not intersections. The crosswalk
   band lives at 0.4..3.2 m of whichever end is nearer.
-- Object custom properties `procgen_maps_road_width` (meters) and
+- Per-face float attributes `procgen_maps_road_width` (meters) and
   `procgen_maps_road_lanes` (1 = local, 2 = arterial), read with Attribute
-  nodes exactly like city_mat.py reads `procgen_maps_material_index`.
+  nodes in GEOMETRY mode (the whole network is one mesh object).
 
 Sidewalk faces (same mesh, slot 1) reuse ROAD_UV_NAME's meter-scaled
 coordinates for a paving-slab grid.
@@ -75,7 +75,9 @@ class _NodeBuilder:
 
     def attribute(self, name):
         node = self.new("ShaderNodeAttribute")
-        node.attribute_type = 'OBJECT'
+        # Per-face mesh attributes (generators/city/streets.py writes them),
+        # not object properties: the whole network is one object since v0.12.
+        node.attribute_type = 'GEOMETRY'
         node.attribute_name = name
         return node.outputs["Fac"]
 

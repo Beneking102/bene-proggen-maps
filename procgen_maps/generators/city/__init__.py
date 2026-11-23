@@ -70,14 +70,21 @@ def plan_city(preset, terrain_params=None, seed=None) -> CityPlan:
                     prop_placements, sign_placements, parking_lot_specs)
 
 
-def generate_city(preset, terrain_params=None, seed=None, parent_collection=None):
+def generate_city(preset, terrain_params=None, seed=None, parent_collection=None, progress=None):
     """Run the full layout -> zones -> streets -> buildings -> props pipeline
     and build all resulting meshes into a fresh 'ProcgenMaps_City' collection
     hierarchy, nested under `parent_collection` (defaults to the scene's root
     collection if not given). Returns a dict of the created collections and
-    intermediate data, useful for the profiler and for tests."""
+    intermediate data, useful for the profiler and for tests. `progress`,
+    if given, is called as progress(fraction, label) between stages
+    (ui/operators.py feeds it to the window manager's progress cursor)."""
     import bpy
 
+    def report(fraction, label):
+        if progress is not None:
+            progress(fraction, label)
+
+    report(0.0, "planning")
     plan = plan_city(preset, terrain_params=terrain_params, seed=seed)
     city_layout = plan.layout
     zone_by_block = plan.zone_by_block
@@ -88,7 +95,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     sign_placements = plan.sign_placements
     parking_lot_specs = plan.parking_lot_specs
 
-    _flatten_terrain_under_buildings(terrain_params, building_plans + special_plans)
+    _flatten_terrain_under_buildings(terrain_params, building_plans + special_plans, street_graph, preset)
 
     if parent_collection is None:
         parent_collection = bpy.context.scene.collection
@@ -99,16 +106,21 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     signage_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Signage", root)
     parking_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Parking", root)
 
+    report(0.15, "streets")
     street_objects = streets.build_street_meshes(street_graph, preset, terrain_params, collection=streets_coll)
+    report(0.25, "buildings")
     building_objects, building_extra_objects = buildings.build_building_meshes(
         building_plans, terrain_params, collection=buildings_coll)
     special_objects, special_extra_objects = special_buildings.build_special_building_meshes(
         special_plans, terrain_params, collection=buildings_coll)
+    report(0.8, "props")
     prop_objects = props.build_props(prop_placements, collection=props_coll)
+    report(0.9, "signage")
     sign_objects = signage.build_signage_meshes(sign_placements, collection=signage_coll)
     parking_objects = []
     for spec in parking_lot_specs:
         parking_objects.extend(parking.build_parking_lot(spec, terrain_params, collection=parking_coll))
+    report(1.0, "done")
 
     return {
         "root_collection": root,
@@ -134,14 +146,16 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     }
 
 
-def _flatten_terrain_under_buildings(terrain_params, plans):
+def _flatten_terrain_under_buildings(terrain_params, plans, street_graph=None, preset=None):
     """Reshape the visible terrain mesh so every building's flat foundation
     sits flush on the ground, using the exact same base_z formula
     buildings.build_building_meshes uses (footprint-centroid height
     sample) - see generators/terrain.py's flatten_terrain_for_footprints
     for why the mesh needs this at all (a coarse grid can't otherwise
     match the precise continuous height every building/street/prop/sign
-    samples directly)."""
+    samples directly) - and sink it under every street footprint
+    (terrain.lower_terrain_under_corridors) so no ground shows through
+    the asphalt."""
     import bpy
 
     from .. import terrain as terrain_gen
@@ -155,8 +169,6 @@ def _flatten_terrain_under_buildings(terrain_params, plans):
     # Drop the previous city's pads first - otherwise a city-only
     # regenerate leaves flat rectangles where the old buildings stood.
     terrain_gen.reset_terrain_heights(terrain_obj, terrain_params)
-    if not plans:
-        return
 
     footprints_with_target_z = []
     for plan in plans:
@@ -164,9 +176,15 @@ def _flatten_terrain_under_buildings(terrain_params, plans):
         cy = sum(p[1] for p in plan.footprint) / len(plan.footprint)
         base_z = terrain_gen.sample_world_height(cx, cy, terrain_params)
         footprints_with_target_z.append((plan.footprint, base_z))
-
-    terrain_gen.flatten_terrain_for_footprints(terrain_obj, terrain_params, footprints_with_target_z,
-                                                margin=global_settings.TERRAIN_FLATTEN_MARGIN)
+    if footprints_with_target_z:
+        terrain_gen.flatten_terrain_for_footprints(terrain_obj, terrain_params, footprints_with_target_z,
+                                                    margin=global_settings.TERRAIN_FLATTEN_MARGIN)
+    # After the pads: a pad's blend reaches under the neighbouring sidewalk
+    # and must not lift the ground back through it.
+    if street_graph is not None and preset is not None and street_graph.edges:
+        terrain_gen.lower_terrain_under_corridors(
+            terrain_obj, terrain_params,
+            streets.road_corridors(street_graph, preset), streets.node_corridor_discs(street_graph, preset))
 
 
 def clear_city():

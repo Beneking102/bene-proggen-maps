@@ -319,12 +319,70 @@ def validate_scene(terrain_params=None, report: ValidationReport = None) -> Vali
                                (obj.location.x, obj.location.y))
         report.checked["ground_contact"] = checked
 
+    if bpy.data.objects.get(terrain_gen.TERRAIN_OBJECT_NAME) is not None:
+        above, checked = terrain_above_roads()
+        report.checked["road_cover"] = checked
+        for x, y, depth in above[:50]:
+            report.add("terrain_above_road", f"terrain pokes {depth:.2f} m through a street surface", (x, y))
+        if len(above) > 50:
+            report.add("terrain_above_road", f"... {len(above) - 50} more terrain vertices above a street surface")
+
     report.checked["datablocks"] = sum(len(getattr(bpy.data, attr))
                                        for attr in ("meshes", "materials", "lights", "curves", "collections"))
     for kind, names in orphan_datablocks().items():
         for name in names:
             report.add("orphan_datablock", f"{kind} '{name}' has no users")
     return report
+
+
+def terrain_above_roads(tolerance=0.005):
+    """Every terrain vertex that lies above a street surface (asphalt strip,
+    intersection fan or sidewalk) directly over it - the ground showing
+    through the road. Casts a ray straight down from far above each
+    terrain vertex against one BVH of all street geometry; a hit below the
+    vertex (by more than `tolerance`) is a poke-through. Returns
+    ([(x, y, depth), ...], vertices_checked). Only vertices inside some
+    street object's bounding box are tested (the rest cannot hit)."""
+    import bpy
+    import numpy as np
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+
+    from .generators import terrain as terrain_gen
+    from .generators.city.streets import STREETS_PREFIX
+
+    terrain = bpy.data.objects.get(terrain_gen.TERRAIN_OBJECT_NAME)
+    streets = [obj for obj in bpy.data.objects if obj.name.startswith(STREETS_PREFIX) and obj.type == 'MESH']
+    if terrain is None or not streets:
+        return [], 0
+    verts, polys, boxes = [], [], []
+    for obj in streets:
+        mesh = obj.data
+        base = len(verts)
+        matrix = obj.matrix_world
+        obj_verts = [matrix @ v.co for v in mesh.vertices]
+        verts.extend(obj_verts)
+        polys.extend([tuple(base + i for i in poly.vertices) for poly in mesh.polygons])
+        xs = [v.x for v in obj_verts]
+        ys = [v.y for v in obj_verts]
+        boxes.append((min(xs), min(ys), max(xs), max(ys)))
+    tree = BVHTree.FromPolygons(verts, polys)
+
+    coords = np.empty(len(terrain.data.vertices) * 3, dtype=np.float32)
+    terrain.data.vertices.foreach_get("co", coords)
+    coords = coords.reshape(-1, 3).astype(np.float64)
+    mask = np.zeros(len(coords), dtype=bool)
+    for (min_x, min_y, max_x, max_y) in boxes:
+        mask |= (coords[:, 0] >= min_x) & (coords[:, 0] <= max_x) & (coords[:, 1] >= min_y) & (coords[:, 1] <= max_y)
+    candidates = coords[mask]
+    top = float(coords[:, 2].max()) + 100.0
+    down = Vector((0.0, 0.0, -1.0))
+    above = []
+    for x, y, z in candidates:
+        hit = tree.ray_cast(Vector((x, y, top)), down)
+        if hit[0] is not None and hit[0].z < z - tolerance:
+            above.append((float(x), float(y), float(z - hit[0].z)))
+    return above, int(len(candidates))
 
 
 def _check_height(report, obj, expected, tolerance, actual=None):

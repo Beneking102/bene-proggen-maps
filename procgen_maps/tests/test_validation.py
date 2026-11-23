@@ -13,7 +13,8 @@ from procgen_maps.generators.city.parking import ParkingLotSpec, plan_parking_lo
 from procgen_maps.generators.city.props import PropPlacement, plan_props, street_prop_trims
 from procgen_maps.generators.city.setback import SIDEWALK_WIDTH, road_clearance
 from procgen_maps.generators.city.signage import plan_signage
-from procgen_maps.generators.city.streets import StreetGraph, build_street_graph, node_fan_radii
+from procgen_maps.generators.city.streets import (StreetGraph, build_street_graph, corner_sidewalk_paths,
+                                                   node_corridor_discs, node_fan_radii, road_corridors)
 from procgen_maps.generators.city.layout import StreetSegment
 from procgen_maps.generators.dungeon import DungeonParams, generate_dungeon
 from procgen_maps.generators.terrain import TerrainParams
@@ -228,3 +229,66 @@ def test_validator_detects_disconnected_streets_and_clean_report_formats():
     assert "disconnected_streets: 1" in report.summary()
     assert ValidationReport().ok and ValidationReport().summary().startswith("OK")
     assert "checked:" in report.format()
+
+
+# --- v0.12.0 regressions: terrain under roads, sidewalk corners --------------
+
+def _wedge_area(inner, outer):
+    """Shoelace area of the ring between an inner and an outer polyline."""
+    ring = list(inner) + list(reversed(outer))
+    return abs(sum(ring[i][0] * ring[(i + 1) % len(ring)][1] - ring[(i + 1) % len(ring)][0] * ring[i][1]
+                   for i in range(len(ring)))) / 2.0
+
+
+def test_corner_sidewalks_close_every_gap_at_a_four_way_crossing():
+    """v0.11.0 trimmed each strip's sidewalk fan_radius + SIDEWALK_WIDTH short
+    of the node and built nothing in between: every crossing had a bare
+    sidewalk-width square of grass on each of its four corners."""
+    half = 4.0
+    outgoing = [((1.0, 0.0), half), ((0.0, 1.0), half), ((-1.0, 0.0), half), ((0.0, -1.0), half)]
+    pieces = corner_sidewalk_paths((10.0, -5.0), outgoing, fan_radius=half)
+    assert len(pieces) == 4
+    for inner, outer in pieces:
+        assert len(inner) == len(outer) == 3
+        # Inner path: strip end -> asphalt corner -> strip end, each 2 m
+        # (one sidewalk width) long, i.e. exactly the missing square.
+        assert _wedge_area(inner, outer) == pytest.approx(SIDEWALK_WIDTH ** 2)
+        corner = inner[1]
+        assert abs(abs(corner[0] - 10.0) - half) < 1e-9 and abs(abs(corner[1] + 5.0) - half) < 1e-9
+
+
+def test_corner_sidewalks_bridge_a_t_junction_and_wrap_around_a_bend():
+    outgoing = [((1.0, 0.0), 3.0), ((-1.0, 0.0), 3.0), ((0.0, 1.0), 3.0)]
+    pieces = corner_sidewalk_paths((0.0, 0.0), outgoing, fan_radius=3.0)
+    assert len(pieces) == 3
+    straight = [(inner, outer) for inner, outer in pieces if len(inner) == 2]
+    assert len(straight) == 1
+    inner, outer = straight[0]
+    # The top of the T: one slab straight across, 2 x trim = 10 m long.
+    assert _wedge_area(inner, outer) == pytest.approx(2 * (3.0 + SIDEWALK_WIDTH) * SIDEWALK_WIDTH)
+    assert all(y == pytest.approx(-3.0) for _x, y in inner)
+
+    bend = corner_sidewalk_paths((0.0, 0.0), [((1.0, 0.0), 3.0), ((0.0, 1.0), 3.0)], fan_radius=3.0)
+    assert len(bend) == 2
+    outside = max(bend, key=lambda piece: len(piece[0]))
+    # Outside of the bend: the inner edge hugs the fan radius all the way
+    # round, so no grass wedge is left between asphalt and pavement.
+    arc = outside[0][1:-1]
+    assert all(math.hypot(x, y) == pytest.approx(3.0) for x, y in arc)
+    assert all(math.hypot(x, y) == pytest.approx(3.0 + SIDEWALK_WIDTH) for x, y in outside[1][1:-1])
+
+
+def test_road_corridors_cover_asphalt_and_both_sidewalks():
+    graph = _cross_graph()
+    preset = PRESETS["KLEINSTADT"]
+    corridors = road_corridors(graph, preset)
+    assert len(corridors) == len(graph.edges)
+    widths = {round(c[4], 3) for c in corridors}
+    assert widths == {round(preset.street_width_arterial / 2 + SIDEWALK_WIDTH, 3),
+                      round(preset.street_width_local / 2 + SIDEWALK_WIDTH, 3)}
+    discs = node_corridor_discs(graph, preset)
+    assert len(discs) == 1    # only the degree-4 center; dead ends need no disc
+    (cx, cy, radius), = discs
+    assert (cx, cy) == (0.0, 0.0)
+    # Reaches the outer corner of the crossing's sidewalk square.
+    assert radius == pytest.approx((preset.street_width_arterial / 2 + SIDEWALK_WIDTH) * math.sqrt(2))

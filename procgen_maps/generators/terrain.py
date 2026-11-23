@@ -194,3 +194,94 @@ def flatten_terrain_for_footprints(terrain_obj, params: TerrainParams, footprint
 
     mesh.vertices.foreach_set("co", coords.ravel())
     mesh.update()
+
+
+ROAD_BED_DEPTH = 0.5      # meters the terrain mesh is sunk below the heightfield under every street footprint
+ROAD_BED_MARGIN = 2.5     # meters of blend from the sunk road bed back up to the untouched terrain
+
+
+def lower_terrain_under_corridors(terrain_obj, params: TerrainParams, corridors, discs=(),
+                                  depth=ROAD_BED_DEPTH, margin=ROAD_BED_MARGIN):
+    """Sink the terrain mesh under every street footprint so the ground
+    never pokes through the asphalt or the sidewalks.
+
+    Streets sample the *continuous* heightfield at their own (sparse)
+    vertices, while the terrain mesh interpolates linearly between grid
+    vertices ~2 m apart - between a road's samples the two surfaces
+    disagree by up to a few decimeters wherever the ground curves, which
+    showed as green blotches through every crossing and along the roads.
+    Lowering the mesh by `depth` under the corridor (and blending back to
+    the heightfield over `margin` meters outside it) puts the ground
+    reliably below the road surface everywhere; the curb/sidewalk hides
+    the step at the edge.
+
+    `corridors` = (ax, ay, bx, by, half_width) per road edge (asphalt plus
+    sidewalks), `discs` = (cx, cy, radius) per node. Lowering is taken as
+    the maximum over all shapes (never summed), so overlapping corridors
+    at a crossing sink exactly once, and a vertex already below the bed
+    (nothing raises terrain except building pads) is left alone. Same
+    foreach_get/foreach_set round trip as flatten_terrain_for_footprints.
+    Returns the number of vertices fully inside a corridor."""
+    import numpy as np
+
+    mesh = terrain_obj.data
+    res = params.resolution
+    half = params.world_size / 2.0
+    step = params.world_size / (res - 1)
+    coords = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
+    mesh.vertices.foreach_get("co", coords)
+    coords = coords.reshape(res, res, 3)
+    lowering = np.zeros((res, res), dtype=np.float64)
+
+    def index_range(lo, hi):
+        lo_index = max(0, int((lo + half) / step) - 1)
+        hi_index = min(res - 1, int((hi + half) / step) + 1)
+        return lo_index, hi_index
+
+    def apply(row_lo, row_hi, col_lo, col_hi, dist, half_width):
+        outside = np.maximum(dist - half_width, 0.0)
+        if margin > 0:
+            factor = np.clip(1.0 - outside / margin, 0.0, 1.0)
+        else:
+            factor = (outside <= 0.0).astype(np.float64)
+        window = lowering[row_lo:row_hi + 1, col_lo:col_hi + 1]
+        np.maximum(window, factor, out=window)
+
+    for (ax, ay, bx, by, half_width) in corridors:
+        reach = half_width + margin
+        col_lo, col_hi = index_range(min(ax, bx) - reach, max(ax, bx) + reach)
+        row_lo, row_hi = index_range(min(ay, by) - reach, max(ay, by) + reach)
+        if col_hi < col_lo or row_hi < row_lo:
+            continue
+        window = coords[row_lo:row_hi + 1, col_lo:col_hi + 1]
+        x = window[..., 0].astype(np.float64)
+        y = window[..., 1].astype(np.float64)
+        dx, dy = bx - ax, by - ay
+        length_sq = dx * dx + dy * dy
+        if length_sq <= 1e-12:
+            t = np.zeros_like(x)
+        else:
+            t = np.clip(((x - ax) * dx + (y - ay) * dy) / length_sq, 0.0, 1.0)
+        dist = np.hypot(x - (ax + t * dx), y - (ay + t * dy))
+        apply(row_lo, row_hi, col_lo, col_hi, dist, half_width)
+
+    for (cx, cy, radius) in discs:
+        reach = radius + margin
+        col_lo, col_hi = index_range(cx - reach, cx + reach)
+        row_lo, row_hi = index_range(cy - reach, cy + reach)
+        if col_hi < col_lo or row_hi < row_lo:
+            continue
+        window = coords[row_lo:row_hi + 1, col_lo:col_hi + 1]
+        dist = np.hypot(window[..., 0].astype(np.float64) - cx, window[..., 1].astype(np.float64) - cy)
+        apply(row_lo, row_hi, col_lo, col_hi, dist, radius)
+
+    # The bed is `depth` under the raw heightfield; vertices a building pad
+    # has raised above it (flatten_terrain_for_footprints runs first, and
+    # its blend reaches under the sidewalk) are pulled down too, so the
+    # bed wins everywhere inside a corridor.
+    bed = generate_heightmap(params) - depth
+    z = coords[..., 2].astype(np.float64)
+    coords[..., 2] = (z - lowering * np.maximum(z - bed, 0.0)).astype(np.float32)
+    mesh.vertices.foreach_set("co", coords.ravel())
+    mesh.update()
+    return int(np.count_nonzero(lowering >= 1.0))

@@ -3,10 +3,14 @@
 `build_street_graph` is pure Python: it snaps and dedupes the raw, often
 overlapping per-block perimeter segments from `layout.py` into a clean
 node/edge graph and classifies intersections by node degree.
-`build_street_meshes` is the bpy build step: one road object per edge -
-the asphalt strip (width by street class) plus a raised sidewalk with a
-curb on each side, in one mesh with two material slots - and a small
-asphalt fan at each 3+-way intersection. Terrain-follow samples
+`build_street_meshes` is the bpy build step: the whole street network as
+ONE mesh object (v0.12.0; it used to be one object per edge and per
+intersection, ~1,100 objects for a Metropole) - per edge an asphalt strip
+(width by street class) plus a raised sidewalk with a curb on each side,
+per node an asphalt fan and the sidewalk corner pieces, two material
+slots. The road width/lane count the asphalt shader needs are per-face
+float attributes (`procgen_maps_road_width` / `procgen_maps_road_lanes`)
+instead of per-object custom properties. Terrain-follow samples
 `generators.terrain.sample_world_height` directly rather than ray-casting
 against the generated mesh, for speed and to avoid depsgraph-ordering
 issues.
@@ -28,9 +32,12 @@ from .layout import StreetSegment
 from .setback import SIDEWALK_WIDTH
 
 _SNAP_TOLERANCE = 0.5  # meters; merges near-identical endpoints from overlapping block-perimeter segments
-_MAX_ROAD_SEGMENT_LENGTH = 12.0  # meters; long strips are chopped into chunks this size at most (see _build_road_strip)
+_MAX_ROAD_SEGMENT_LENGTH = 6.0   # meters; strips are chopped into chunks this size at most so they follow the terrain (see _build_road_strip)
 
 STREETS_PREFIX = "ProcgenMaps_Street"
+STREET_NETWORK_OBJECT_NAME = f"{STREETS_PREFIX}_Network"
+ROAD_WIDTH_ATTRIBUTE = "procgen_maps_road_width"   # per-face float: asphalt width in meters (0 on sidewalks/fans)
+ROAD_LANES_ATTRIBUTE = "procgen_maps_road_lanes"   # per-face float: 1 = local, 2 = arterial (0 on sidewalks/fans)
 
 CURB_HEIGHT = 0.12            # meters the sidewalk surface sits above the asphalt
 ROAD_LIFT = 0.05              # meters above terrain, avoids z-fighting with the ground
@@ -107,9 +114,111 @@ def sidewalk_trim(node_degree: int, fan_radius: float) -> float:
     return fan_radius + SIDEWALK_WIDTH
 
 
+def _edge_half_width(street_class, preset):
+    return (preset.street_width_arterial if street_class == "arterial" else preset.street_width_local) / 2.0
+
+
+def _line_intersection(p, d, q, e):
+    """Intersection of the lines p + s*d and q + t*e (2-D), or None if parallel."""
+    denominator = d[0] * e[1] - d[1] * e[0]
+    if abs(denominator) < 1e-9:
+        return None
+    s = ((q[0] - p[0]) * e[1] - (q[1] - p[1]) * e[0]) / denominator
+    return (p[0] + d[0] * s, p[1] + d[1] * s)
+
+
+def corner_sidewalk_paths(node, outgoing, fan_radius, arc_segments=6):
+    """Sidewalk pieces that close the gaps between the trimmed sidewalk
+    strips meeting at a node. `outgoing` is [(direction (unit dx, dy),
+    half_width), ...] for every edge leaving `node`.
+
+    Each strip stops `sidewalk_trim` short of the node, so without these
+    pieces every 90-degree corner lost a sidewalk-width square of pavement
+    (grass showing between the two curbs), a straight-through node lost a
+    2 x trim long stretch, and the outside of a bend had nothing at all.
+
+    Returns one (inner_path, outer_path) pair per wedge between two
+    angularly consecutive edges - polylines of equal length that
+    _build_node_mesh zips into curb + slab quads. The inner path runs
+    along the asphalt edge: strip end -> asphalt corner -> strip end for a
+    convex wedge, straight across for a 180-degree wedge, and an arc
+    around the node for a reflex wedge (the outside of a bend). Pure
+    Python, unit-tested."""
+    if len(outgoing) < 2:
+        return []
+    trim = fan_radius + SIDEWALK_WIDTH
+    ordered = sorted(outgoing, key=lambda item: math.atan2(item[0][1], item[0][0]))
+    pieces = []
+    for i, (d1, h1) in enumerate(ordered):
+        d2, h2 = ordered[(i + 1) % len(ordered)]
+        n1 = (-d1[1], d1[0])          # left of d1: faces the next edge counter-clockwise
+        n2 = (d2[1], -d2[0])          # right of d2: faces back toward d1
+        inner1 = (node[0] + d1[0] * trim + n1[0] * h1, node[1] + d1[1] * trim + n1[1] * h1)
+        outer1 = (node[0] + d1[0] * trim + n1[0] * (h1 + SIDEWALK_WIDTH),
+                  node[1] + d1[1] * trim + n1[1] * (h1 + SIDEWALK_WIDTH))
+        inner2 = (node[0] + d2[0] * trim + n2[0] * h2, node[1] + d2[1] * trim + n2[1] * h2)
+        outer2 = (node[0] + d2[0] * trim + n2[0] * (h2 + SIDEWALK_WIDTH),
+                  node[1] + d2[1] * trim + n2[1] * (h2 + SIDEWALK_WIDTH))
+        wedge = (math.atan2(d2[1], d2[0]) - math.atan2(d1[1], d1[0])) % (2 * math.pi)
+        if abs(wedge - math.pi) < math.radians(3):
+            pieces.append(([inner1, inner2], [outer1, outer2]))
+        elif wedge < math.pi:
+            corner = _line_intersection(inner1, d1, inner2, d2)
+            outer_corner = _line_intersection(outer1, d1, outer2, d2)
+            if corner is None or outer_corner is None:
+                pieces.append(([inner1, inner2], [outer1, outer2]))
+            else:
+                pieces.append(([inner1, corner, inner2], [outer1, outer_corner, outer2]))
+        else:
+            # Reflex wedge (outside of a bend): follow strip 1's curb back
+            # to the node, sweep around the asphalt fan, then out along
+            # strip 2's curb, so the pavement hugs the asphalt with no
+            # grass wedge between them.
+            inner = [inner1, (node[0] + n1[0] * fan_radius, node[1] + n1[1] * fan_radius)]
+            outer = [outer1, (node[0] + n1[0] * (fan_radius + SIDEWALK_WIDTH),
+                              node[1] + n1[1] * (fan_radius + SIDEWALK_WIDTH))]
+            start = math.atan2(n1[1], n1[0])
+            sweep = (math.atan2(n2[1], n2[0]) - start) % (2 * math.pi)
+            for k in range(1, arc_segments):
+                angle = start + sweep * k / arc_segments
+                inner.append((node[0] + math.cos(angle) * fan_radius, node[1] + math.sin(angle) * fan_radius))
+                outer.append((node[0] + math.cos(angle) * (fan_radius + SIDEWALK_WIDTH),
+                              node[1] + math.sin(angle) * (fan_radius + SIDEWALK_WIDTH)))
+            inner.append((node[0] + n2[0] * fan_radius, node[1] + n2[1] * fan_radius))
+            outer.append((node[0] + n2[0] * (fan_radius + SIDEWALK_WIDTH),
+                          node[1] + n2[1] * (fan_radius + SIDEWALK_WIDTH)))
+            inner.append(inner2)
+            outer.append(outer2)
+            pieces.append((inner, outer))
+    return pieces
+
+
+def road_corridors(graph: StreetGraph, preset):
+    """(ax, ay, bx, by, half_width) per edge, half_width covering asphalt plus
+    both sidewalks - the ground footprint every street object occupies.
+    generators/terrain.py's lower_terrain_under_corridors uses it so the
+    terrain mesh never pokes through the road surface."""
+    return [(graph.nodes[a][0], graph.nodes[a][1], graph.nodes[b][0], graph.nodes[b][1],
+             _edge_half_width(street_class, preset) + SIDEWALK_WIDTH)
+            for (a, b, street_class) in graph.edges]
+
+
+def node_corridor_discs(graph: StreetGraph, preset):
+    """(cx, cy, radius) per node of degree >= 2: the corner pieces and
+    intersection fans reach fan_radius + 2 x SIDEWALK_WIDTH around the node
+    (the outer corner of a crossing), and the outside of a bend sweeps a
+    full arc of that radius."""
+    radii = node_fan_radii(graph, preset)
+    return [(graph.nodes[n][0], graph.nodes[n][1], (radii[n] + SIDEWALK_WIDTH) * math.sqrt(2.0))
+            for n, degree in graph.node_degree.items() if degree >= 2]
+
+
 def build_street_meshes(graph: StreetGraph, preset, terrain_params=None, collection=None):
-    """Build one road object per edge (asphalt + sidewalks/curbs) plus
-    intersection fans. Returns the created objects."""
+    """Build the whole street network (asphalt strips + sidewalks/curbs per
+    edge, fans + sidewalk corners per node) into one mesh object. Returns
+    the created objects (a one-element list)."""
+    import bpy
+
     from .. import terrain as terrain_gen
     from ...materials import road_mat
 
@@ -121,36 +230,48 @@ def build_street_meshes(graph: StreetGraph, preset, terrain_params=None, collect
     asphalt = road_mat.get_or_create_road_material()
     sidewalk = road_mat.get_or_create_sidewalk_material()
     fan_radius_by_node = node_fan_radii(graph, preset)
+    data = _RoadMeshData()
 
-    created = []
     for index, (a, b, street_class) in enumerate(graph.edges):
         arterial = street_class == "arterial"
         width = preset.street_width_arterial if arterial else preset.street_width_local
         degree_a = graph.node_degree.get(a, 0)
         degree_b = graph.node_degree.get(b, 0)
         radius_a, radius_b = fan_radius_by_node[a], fan_radius_by_node[b]
-        obj = _build_road_strip(
-            f"{STREETS_PREFIX}_Seg{index}", graph.nodes[a], graph.nodes[b], width, height_at,
+        _build_road_strip(
+            data, graph.nodes[a], graph.nodes[b], width, height_at,
             crosswalk_ends=(degree_a >= 3, degree_b >= 3), fan_radii=(radius_a, radius_b),
             sidewalk_trims=(sidewalk_trim(degree_a, radius_a), sidewalk_trim(degree_b, radius_b)),
-            materials=(asphalt, sidewalk))
-        obj["procgen_maps_street_class"] = street_class
-        obj["procgen_maps_road_width"] = float(width)
-        obj["procgen_maps_road_lanes"] = 2.0 if arterial else 1.0
-        if collection is not None:
-            collection.objects.link(obj)
-        created.append(obj)
+            lanes=2.0 if arterial else 1.0)
+
+    outgoing_by_node = defaultdict(list)
+    for (a, b, street_class) in graph.edges:
+        (ax, ay), (bx, by) = graph.nodes[a], graph.nodes[b]
+        length = math.hypot(bx - ax, by - ay) or 1.0
+        direction = ((bx - ax) / length, (by - ay) / length)
+        half = _edge_half_width(street_class, preset)
+        outgoing_by_node[a].append((direction, half))
+        outgoing_by_node[b].append(((-direction[0], -direction[1]), half))
 
     for node_index, degree in graph.node_degree.items():
-        if degree < 3:
+        if degree < 2:
             continue
-        obj = _build_intersection_fan(f"{STREETS_PREFIX}_Node{node_index}", graph.nodes[node_index],
-                                      fan_radius_by_node[node_index], height_at, material=asphalt)
-        if collection is not None:
-            collection.objects.link(obj)
-        created.append(obj)
+        outgoing = outgoing_by_node[node_index]
+        # A fan covers every crossing and every bend; a straight-through
+        # node (two collinear edges) needs none, its strips already meet.
+        straight = degree == 2 and abs(outgoing[0][0][0] * outgoing[1][0][0]
+                                       + outgoing[0][0][1] * outgoing[1][0][1] + 1.0) < 1e-3
+        _build_node_mesh(data, graph.nodes[node_index], fan_radius_by_node[node_index], outgoing, height_at,
+                         with_fan=not straight)
 
-    return created
+    mesh = data.to_mesh(STREET_NETWORK_OBJECT_NAME, (asphalt, sidewalk))
+    obj = bpy.data.objects.new(STREET_NETWORK_OBJECT_NAME, mesh)
+    obj["procgen_maps_street_class"] = "network"
+    obj["procgen_maps_street_edges"] = len(graph.edges)
+    obj["procgen_maps_street_nodes"] = len(graph.nodes)
+    if collection is not None:
+        collection.objects.link(obj)
+    return [obj]
 
 
 class _RoadMeshData:
@@ -163,6 +284,8 @@ class _RoadMeshData:
         self.end_uv = []       # (to start, to end) meters minus fan radius, per vertex
         self.faces = []
         self.material_index = []
+        self.road_width = []   # per face, meters (asphalt strips only)
+        self.road_lanes = []   # per face, 1 local / 2 arterial (asphalt strips only)
 
     def add_vert(self, co, road_uv, end_uv):
         self.verts.append(co)
@@ -170,9 +293,11 @@ class _RoadMeshData:
         self.end_uv.append(end_uv)
         return len(self.verts) - 1
 
-    def add_face(self, indices, material_index):
+    def add_face(self, indices, material_index, width=0.0, lanes=0.0):
         self.faces.append(tuple(indices))
         self.material_index.append(material_index)
+        self.road_width.append(width)
+        self.road_lanes.append(lanes)
 
     def to_mesh(self, name, materials):
         import bpy
@@ -185,6 +310,9 @@ class _RoadMeshData:
         for material in materials:
             mesh.materials.append(material)
         mesh.polygons.foreach_set("material_index", self.material_index)
+        for attribute_name, values in ((ROAD_WIDTH_ATTRIBUTE, self.road_width), (ROAD_LANES_ATTRIBUTE, self.road_lanes)):
+            attribute = mesh.attributes.new(attribute_name, 'FLOAT', 'FACE')
+            attribute.data.foreach_set("value", values)
 
         loop_verts = [i for face in self.faces for i in face]
         for uv_name, per_vertex in ((road_mat.ROAD_UV_NAME, self.road_uv), (road_mat.ROAD_END_UV_NAME, self.end_uv)):
@@ -196,8 +324,8 @@ class _RoadMeshData:
         return mesh
 
 
-def _build_road_strip(name, start, end, width, height_at, crosswalk_ends=(False, False), fan_radii=(0.0, 0.0),
-                      sidewalk_trims=(0.0, 0.0), materials=()):
+def _build_road_strip(data, start, end, width, height_at, crosswalk_ends=(False, False), fan_radii=(0.0, 0.0),
+                      sidewalk_trims=(0.0, 0.0), lanes=1.0):
     """A single quad spanning the whole edge only samples terrain height at
     its 4 corners - fine for a short block face, but a long arterial can
     run for 100+ meters, and the terrain can undulate meaningfully between
@@ -212,8 +340,7 @@ def _build_road_strip(name, start, end, width, height_at, crosswalk_ends=(False,
     The sidewalks (one per side, SIDEWALK_WIDTH wide, CURB_HEIGHT above
     the asphalt, with a vertical curb face) are built the same chunked way
     over the trimmed range [trim_a, length - trim_b] so they stop short of
-    crossing streets (see sidewalk_trim)."""
-    import bpy
+    crossing streets (see sidewalk_trim). Appends to the shared `data`."""
     import mathutils
 
     from ...materials import road_mat
@@ -236,8 +363,6 @@ def _build_road_strip(name, start, end, width, height_at, crosswalk_ends=(False,
         to_end = (length - along) - fan_radii[1] if crosswalk_ends[1] else road_mat.ROAD_END_SENTINEL
         return (to_start, to_end)
 
-    data = _RoadMeshData()
-
     # Asphalt strip: material 0, across = +half (left) / -half (right).
     segment_count = max(1, math.ceil(length / _MAX_ROAD_SEGMENT_LENGTH))
     ring = []
@@ -249,7 +374,7 @@ def _build_road_strip(name, start, end, width, height_at, crosswalk_ends=(False,
                      data.add_vert((right[0], right[1], height_at(*right)), (along, -half), end_uv_at(along))))
     for i in range(segment_count):
         (l0, r0), (l1, r1) = ring[i], ring[i + 1]
-        data.add_face((l0, r0, r1, l1), 0)
+        data.add_face((l0, r0, r1, l1), 0, width=width, lanes=lanes)
 
     # Sidewalks + curbs: material 1. No crosswalk/marking data needed (the
     # sidewalk shader only reads the along/across UV for its paving joints),
@@ -283,27 +408,45 @@ def _build_road_strip(name, start, end, width, height_at, crosswalk_ends=(False,
                     data.add_face((f1, f0, t0, t1), 1)
                     data.add_face((t1, t0, o0, o1), 1)
 
-    mesh = data.to_mesh(name, materials)
-    return bpy.data.objects.new(name, mesh)
 
-
-def _build_intersection_fan(name, center, radius, height_at, sides=8, material=None):
-    import bpy
-
+def _build_node_mesh(data, center, radius, outgoing, height_at, with_fan=True, sides=8):
+    """Per street node: the asphalt fan (slot 0) that covers the overlapping
+    strip ends, plus the sidewalk corner pieces (slot 1) from
+    corner_sidewalk_paths that join the trimmed strips of the meeting
+    streets. Appends to the shared `data`."""
     from ...materials import road_mat
 
     cx, cy = center
-    data = _RoadMeshData()
     no_marks = (0.0, road_mat.NO_MARKINGS_V)
     no_ends = (road_mat.ROAD_END_SENTINEL, road_mat.ROAD_END_SENTINEL)
-    data.add_vert((cx, cy, height_at(cx, cy) + FAN_LIFT), no_marks, no_ends)
-    for i in range(sides):
-        angle = (2 * math.pi * i) / sides
-        px = cx + radius * math.cos(angle)
-        py = cy + radius * math.sin(angle)
-        data.add_vert((px, py, height_at(px, py) + FAN_LIFT), no_marks, no_ends)
-    for i in range(sides):
-        data.add_face((0, i + 1, (i + 1) % sides + 1), 0)
+    if with_fan:
+        hub = data.add_vert((cx, cy, height_at(cx, cy) + FAN_LIFT), no_marks, no_ends)
+        rim = []
+        for i in range(sides):
+            angle = (2 * math.pi * i) / sides
+            px = cx + radius * math.cos(angle)
+            py = cy + radius * math.sin(angle)
+            rim.append(data.add_vert((px, py, height_at(px, py) + FAN_LIFT), no_marks, no_ends))
+        for i in range(sides):
+            data.add_face((hub, rim[i], rim[(i + 1) % sides]), 0)
 
-    mesh = data.to_mesh(name, (material,) if material is not None else ())
-    return bpy.data.objects.new(name, mesh)
+    for inner_path, outer_path in corner_sidewalk_paths(center, outgoing, radius):
+        feet, tops, outers = [], [], []
+        for (ix, iy), (ox, oy) in zip(inner_path, outer_path):
+            inner_z = height_at(ix, iy)
+            feet.append(data.add_vert((ix, iy, inner_z), (ix - cx, iy - cy), no_ends))
+            tops.append(data.add_vert((ix, iy, inner_z + CURB_HEIGHT), (ix - cx, iy - cy), no_ends))
+            if outers and abs(data.verts[outers[-1]][0] - ox) < 1e-6 and abs(data.verts[outers[-1]][1] - oy) < 1e-6:
+                outers.append(outers[-1])   # equal-width crossing: outer corner coincides with the strip ends
+            else:
+                outers.append(data.add_vert((ox, oy, height_at(ox, oy) + CURB_HEIGHT), (ox - cx, oy - cy), no_ends))
+        for k in range(len(inner_path) - 1):
+            if inner_path[k] != inner_path[k + 1]:
+                data.add_face((feet[k], feet[k + 1], tops[k + 1], tops[k]), 1)     # curb, facing the road
+            quad = (tops[k], tops[k + 1], outers[k + 1], outers[k])
+            unique = []
+            for v in quad:
+                if v not in unique:
+                    unique.append(v)
+            if len(unique) >= 3:
+                data.add_face(unique, 1)                                             # slab top

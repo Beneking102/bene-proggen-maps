@@ -269,6 +269,31 @@ def _enable_high_quality_rendering(context):
         pass  # older/non-EEVEE-Next engine without this setting - nothing to enable
 
 
+class _ProgressReporter:
+    """Drives the window manager's progress cursor (the percentage next to
+    the mouse pointer) while a long generate runs; a no-op headless. Also
+    prints the stages when the generate takes long enough to matter."""
+
+    def __init__(self, context):
+        self._wm = getattr(context, "window_manager", None)
+        self._active = False
+        try:
+            if self._wm is not None and context.window is not None:
+                self._wm.progress_begin(0, 100)
+                self._active = True
+        except (AttributeError, RuntimeError):
+            self._active = False
+
+    def __call__(self, fraction, label):
+        if self._active:
+            self._wm.progress_update(int(fraction * 100))
+
+    def end(self):
+        if self._active:
+            self._wm.progress_end()
+            self._active = False
+
+
 class PROCGEN_OT_generate_terrain(bpy.types.Operator):
     bl_idname = "procgen_maps.generate_terrain"
     bl_label = "Generate Terrain"
@@ -314,11 +339,15 @@ class PROCGEN_OT_generate_city(bpy.types.Operator):
 
         profiler = Profiler()
         city_gen.clear_city()
-        with profiler.stage("city"):
-            city_mat.get_or_create_city_material()
-            result = city_gen.generate_city(preset, terrain_params=terrain_params, seed=settings.seed,
-                                             parent_collection=_root_collection())
-            _assign_city_material(result["building_objects"])
+        progress = _ProgressReporter(context)
+        try:
+            with profiler.stage("city"):
+                city_mat.get_or_create_city_material()
+                result = city_gen.generate_city(preset, terrain_params=terrain_params, seed=settings.seed,
+                                                 parent_collection=_root_collection(), progress=progress)
+                _assign_city_material(result["building_objects"])
+        finally:
+            progress.end()
 
         all_objects = (result["street_objects"] + result["building_objects"]
                        + result["building_extra_objects"] + result["prop_objects"] + result["sign_objects"]
