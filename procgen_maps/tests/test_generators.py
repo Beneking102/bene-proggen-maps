@@ -111,6 +111,22 @@ def test_fbm_heightmap_determinism_and_seed_sensitivity():
     assert not np.array_equal(a, c)
 
 
+def test_fbm_scalar_fast_path_is_bit_identical_to_array_path():
+    # The scalar fast path (pure Python ints/floats) must agree exactly with
+    # the numpy path (wrapping int64 hash) - every street vertex, prop and
+    # building samples terrain height through the scalar path while the
+    # terrain mesh itself comes from the array path, so even a 1-ulp
+    # disagreement would let geometry drift off the visible ground.
+    rng = np.random.default_rng(3)
+    points = rng.uniform(-900.0, 900.0, size=(400, 2))
+    for scale, octaves, seed in ((160.0, 4, 0), (120.0, 5, 42), (37.5, 3, 7)):
+        scalar = [fbm(float(x), float(y), scale=scale, octaves=octaves, seed=seed) for x, y in points]
+        array = fbm(points[:, 0], points[:, 1], scale=scale, octaves=octaves, seed=seed)
+        assert isinstance(scalar[0], float)
+        assert scalar == list(array)   # exact, not approx
+    assert fbm(3, 4, scale=50.0, seed=1) == fbm(3.0, 4.0, scale=50.0, seed=1)
+
+
 def test_value_noise_2d_deterministic_and_bounded():
     a = value_noise_2d(3.7, -2.1, seed=4)
     b = value_noise_2d(3.7, -2.1, seed=4)

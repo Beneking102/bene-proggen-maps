@@ -66,6 +66,31 @@ def _value_noise_grid(xs, ys, seed):
     return nx0 + sy * (nx1 - nx0)
 
 
+def _fbm_scalar(x, y, scale, octaves, persistence, lacunarity, seed):
+    """Plain-Python twin of the numpy path below for a single point.
+
+    Bit-for-bit identical to the array version: the hash's `& 0xFFFFFFFF`
+    only depends on the low 64 bits of every intermediate, so Python's
+    unbounded ints and numpy's wrapping int64 agree, and every float
+    operation is done in the same order. The numpy path costs ~150-300 us
+    per *scalar* call (0-d array creation, 4 octaves x 4 ufunc hash
+    chains), which added up to 1.3-2.3 s per city since every street
+    vertex, prop, sign and building samples terrain height one point at
+    a time; this takes ~10 us."""
+    xs = x / scale
+    ys = y / scale
+    total = 0.0
+    amplitude = 1.0
+    frequency = 1.0
+    max_amplitude = 0.0
+    for octave in range(octaves):
+        total = total + value_noise_2d(xs * frequency, ys * frequency, seed + octave * 101) * amplitude
+        max_amplitude += amplitude
+        amplitude *= persistence
+        frequency *= lacunarity
+    return total / max_amplitude
+
+
 def fbm(x, y, *, scale=100.0, octaves=5, persistence=0.5, lacunarity=2.0, seed=0):
     """Fractal Brownian motion sampled at world-space coordinates.
 
@@ -73,6 +98,9 @@ def fbm(x, y, *, scale=100.0, octaves=5, persistence=0.5, lacunarity=2.0, seed=0
     they do not need to form a meshgrid. Returns values normalized to
     [0, 1]. `scale` is the dominant feature size in world units.
     """
+    if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+        return _fbm_scalar(float(x), float(y), scale, octaves, persistence, lacunarity, seed)
+
     xs = np.asarray(x, dtype=np.float64) / scale
     ys = np.asarray(y, dtype=np.float64) / scale
 

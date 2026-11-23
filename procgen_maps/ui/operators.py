@@ -119,19 +119,40 @@ def apply_street_lamp_energy(context, energy: float):
     _update_lamp_lights(settings.night_mode, energy)
 
 
+def _first_owner_collections():
+    """name -> the first Collection (in bpy.data.collections order, then the
+    scene's master collection) containing each object. Built once per
+    night-mode toggle: `obj.users_collection` is implemented in Python as a
+    scan over every collection's objects, so calling it per street lamp
+    cost ~0.3 ms x thousands of lamps - half the toggle's time."""
+    owner = {}
+    for collection in bpy.data.collections:
+        for obj in collection.objects:
+            owner.setdefault(obj.name, collection)
+    for obj in bpy.context.scene.collection.objects:
+        owner.setdefault(obj.name, bpy.context.scene.collection)
+    return owner
+
+
 def _update_lamp_lights(enabled: bool, energy: float = 400.0):
-    for obj in list(bpy.data.objects):
+    all_objects = list(bpy.data.objects)
+    # One dict instead of a bpy.data.objects.get() RNA lookup per lamp.
+    by_name = {obj.name: obj for obj in all_objects}
+    owner_collections = None
+    for obj in all_objects:
         if obj.get("procgen_maps_asset_id") != "street_lamp":
             continue
         light_name = obj.name + _LAMP_LIGHT_SUFFIX
-        light_obj = bpy.data.objects.get(light_name)
+        light_obj = by_name.get(light_name)
         if enabled:
             if light_obj is None:
+                if owner_collections is None:
+                    owner_collections = _first_owner_collections()
                 light_data = bpy.data.lights.new(light_name, type='POINT')
                 light_data.color = (1.0, 0.85, 0.5)
                 light_obj = bpy.data.objects.new(light_name, light_data)
                 light_obj.location = (obj.location.x, obj.location.y, obj.location.z + 3.8)
-                target_collection = obj.users_collection[0] if obj.users_collection else bpy.context.scene.collection
+                target_collection = owner_collections.get(obj.name, bpy.context.scene.collection)
                 target_collection.objects.link(light_obj)
             light_obj.data.energy = energy
             light_obj.hide_viewport = False

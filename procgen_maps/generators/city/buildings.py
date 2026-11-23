@@ -191,20 +191,21 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
     top_face = base_face
     for floor_index in range(plan.floors):
         # extrude_face_region's own "geom" return only ever reports the
-        # single moved top face, never the newly created side faces (a real
-        # bmesh quirk, confirmed empirically) - a before/after set diff over
-        # bm.faces is the only reliable way to get all 5 new faces (4 sides
-        # + 1 top) per floor.
-        faces_before = set(bm.faces)
+        # single moved top face plus the new verts/edges, never the newly
+        # created side faces (a real bmesh quirk, confirmed empirically).
+        # Every face created by the extrude - the 4+ sides and the top cap -
+        # touches at least one of the new verts, and no pre-existing face
+        # does, so the new verts' link_faces are exactly the new faces.
+        # (This replaced a before/after set diff over *all* of bm.faces,
+        # which was O(total faces) per floor - quadratic for tall towers.)
         extruded = bmesh.ops.extrude_face_region(bm, geom=[top_face])
         new_verts = [g for g in extruded["geom"] if isinstance(g, bmesh.types.BMVert)]
         bmesh.ops.translate(bm, verts=new_verts, vec=(0.0, 0.0, plan.floor_height))
-        bm.faces.ensure_lookup_table()
-        # A bare set difference iterates in memory-address order, which
-        # differs from run to run - and since the window rng is drawn in
-        # face order, the same seed produced different window layouts on
-        # every launch. Sort geometrically so the order is reproducible.
-        new_faces = sorted(set(bm.faces) - faces_before, key=_face_sort_key)
+        # Sets iterate in memory-address order, which differs from run to
+        # run - and since the window rng is drawn in face order, the same
+        # seed produced different window layouts on every launch. Sort
+        # geometrically so the order is reproducible.
+        new_faces = sorted({face for vert in new_verts for face in vert.link_faces}, key=_face_sort_key)
 
         # Picking by largest area (not just "first match") matters here:
         # `new_faces` comes from an unordered set diff, and a small window
@@ -214,20 +215,15 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
         top_candidates = [f for f in new_faces if abs(f.normal.z) > 0.9]
         top_face = max(top_candidates, key=lambda f: f.calc_area()) if top_candidates else new_faces[-1]
 
+        side_faces = [f for f in new_faces if abs(f.normal.z) < 0.1]
         if floor_index == 0:
-            side_faces = [f for f in new_faces if abs(f.normal.z) < 0.1]
             entrance_face = min(side_faces, key=lambda f: f.calc_center_median().y) if side_faces else None
-            for face in side_faces:
-                if face is entrance_face:
-                    _add_entrance(bm, face)
-                elif plan.facade.window_frequency > 0:
-                    _add_window_row(bm, face, plan.facade, window_rng)
-            continue
+            if entrance_face is not None:
+                _add_entrance(bm, entrance_face)
+            side_faces = [f for f in side_faces if f is not entrance_face]
 
         if plan.facade.window_frequency > 0:
-            side_faces = [f for f in new_faces if abs(f.normal.z) < 0.1]
-            for face in side_faces:
-                _add_window_row(bm, face, plan.facade, window_rng)
+            _carve_floor_windows(bm, side_faces, plan.facade, window_rng)
 
     if plan.facade.roof_style != "flat":
         bm.faces.ensure_lookup_table()
@@ -275,16 +271,21 @@ def _add_entrance(bm, face):
     face.material_index = 1
 
 
-def _add_window_row(bm, face, facade: "FacadeType", rng: random.Random):
-    """Split one floor's side face into window-pitch-wide columns and punch
-    a recessed window into a random subset of them (frequency-controlled,
-    drawn from the building's own `rng` - see window_mask), instead of
-    insetting the whole face as one big panel."""
+_WINDOW_INSET_DEPTH = -0.12
+
+
+def _plan_window_row(bm, face, facade: "FacadeType", rng: random.Random):
+    """Split one floor's side face into window-pitch-wide columns and decide
+    which columns get a recessed window (frequency-controlled, drawn from
+    the building's own `rng` - see window_mask). Returns [(column_face,
+    inset_thickness)] for the chosen columns; the actual inset is done by
+    _carve_floor_windows so a whole floor's windows go through as few
+    bmesh.ops calls as possible."""
     import bmesh
 
     horizontal = _horizontal_edges(face)
     if len(horizontal) != 2:
-        return
+        return []
     face_width = horizontal[0].calc_length()
     columns = max(1, round(face_width / facade.width_pitch))
 
@@ -297,17 +298,23 @@ def _add_window_row(bm, face, facade: "FacadeType", rng: random.Random):
     else:
         column_faces = [face]
 
-    for column_face, has_window in zip(column_faces, window_mask(rng, len(column_faces), facade.window_frequency)):
-        if not has_window:
-            continue
-        thickness = min(0.35, column_face.calc_area() ** 0.5 * 0.25)
-        # inset_individual keeps `column_face` itself as the recessed inner
-        # pane (only the 4 new surrounding frame faces come back in
-        # result["faces"]) - tag that surviving reference as glass so the
-        # window actually reads as a distinct material, not just a subtle
-        # depth cue in the same wall color.
-        bmesh.ops.inset_individual(bm, faces=[column_face], thickness=thickness, depth=-0.12)
-        column_face.material_index = 1
+    return [column_face for column_face, has_window
+            in zip(column_faces, window_mask(rng, len(column_faces), facade.window_frequency)) if has_window]
+
+
+def _carve_floor_windows(bm, side_faces, facade: "FacadeType", rng: random.Random):
+    """Window-carve every side face of one floor: one inset per window."""
+    import bmesh
+
+    for face in side_faces:
+        for column_face in _plan_window_row(bm, face, facade, rng):
+            thickness = min(0.35, column_face.calc_area() ** 0.5 * 0.25)
+            # inset_individual keeps `column_face` itself as the recessed
+            # inner pane (only the new surrounding frame faces come back in
+            # result["faces"]) - tag that surviving reference as glass so
+            # the window reads as a distinct material, not just a depth cue.
+            bmesh.ops.inset_individual(bm, faces=[column_face], thickness=thickness, depth=_WINDOW_INSET_DEPTH)
+            column_face.material_index = 1
 
 
 def _build_gable_roof(bm, top_face, footprint):
