@@ -15,7 +15,9 @@ from ...utils.spatial import SpatialHashGrid
 from .. import terrain as terrain_gen
 from .buildings import BuildingPlan
 from .layout import Block
-from .streets import StreetGraph
+from . import setback
+from .setback import SIDEWALK_WIDTH
+from .streets import StreetGraph, node_fan_radii, sidewalk_trim
 
 PROPS_COLLECTION_NAME = "ProcgenMaps_Props"
 
@@ -27,6 +29,8 @@ _SIGN_CHANCE_AT_SHOPFRONT = 0.6
 _PARK_FOUNTAIN_MIN_AREA = 400.0  # sq meters; smaller parks get benches/trees only, no centerpiece
 _SIDEWALK_PROP_INSET = 1.0       # meters from the curb to the lamp/tree line (inside the 2 m sidewalk)
 _CAR_LANE_INSET = 1.3            # meters from the curb to a parked car's centerline
+_END_CLEARANCE = 0.5             # meters past the crossing street's sidewalk before the first lamp/tree
+_PARKING_LOT_MARGIN = 0.5        # meters around a parking lot kept free of street props
 
 # City-edge forest: trees scattered in a ring outside the built-up radius,
 # thinning out with distance, so the city doesn't end in a hard line on
@@ -47,7 +51,7 @@ class PropPlacement:
 
 def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int, str],
                 preset, seed=None, terrain_params=None, building_plans: List[BuildingPlan] = None,
-                city_radius: float = None) -> List[PropPlacement]:
+                city_radius: float = None, parking_lot_specs=None) -> List[PropPlacement]:
     """Compute collision-free placement points for all prop categories.
 
     If `city_radius` is given, a forest ring is scattered outside it (see
@@ -62,12 +66,18 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
     in the collision grid (as its bounding circle - a conservative
     approximation, since footprints are rectangles) before any prop is
     placed, so lamps/trees/benches/signs never spawn inside or clipping a
-    building."""
+    building. `parking_lot_specs` (parking.ParkingLotSpec) likewise keep
+    their rectangles free of street props."""
     rng = random.Random(preset.seed if seed is None else seed)
     grid = SpatialHashGrid(cell_size=5.0)
     placements: List[PropPlacement] = []
     density = max(preset.prop_density, 0.05)
     tree_ids = library.tree_asset_ids()
+    fan_radius_by_node = node_fan_radii(graph, preset)
+    roads = setback.roads_from_graph(graph, preset)
+    lot_rects = [(spec.cx - spec.half_width - _PARKING_LOT_MARGIN, spec.cy - spec.half_depth - _PARKING_LOT_MARGIN,
+                  spec.cx + spec.half_width + _PARKING_LOT_MARGIN, spec.cy + spec.half_depth + _PARKING_LOT_MARGIN)
+                 for spec in (parking_lot_specs or [])]
 
     for index, plan in enumerate(building_plans or []):
         cx = sum(p[0] for p in plan.footprint) / len(plan.footprint)
@@ -81,8 +91,12 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         return terrain_gen.sample_world_height(x, y, terrain_params)
 
     def try_place(asset_id, x, y, rotation_z=0.0, scale=1.0):
-        radius = library.get_asset(asset_id).footprint_radius
+        # The footprint grows with the instance scale (forest trees are up
+        # to 1.6x) - checking the unscaled radius let big trees overlap.
+        radius = library.get_asset(asset_id).footprint_radius * scale
         if grid.has_collision(x, y, radius):
+            return False
+        if any(x0 < x < x1 and y0 < y < y1 for (x0, y0, x1, y1) in lot_rects):
             return False
         grid.insert(asset_id, x, y, radius)
         placements.append(PropPlacement(asset_id, (x, y, height_at(x, y)), rotation_z, scale))
@@ -100,16 +114,27 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         # SIDEWALK_WIDTH wide along each curb), not out in the grass.
         offset = width / 2.0 + _SIDEWALK_PROP_INSET
 
-        n_lamps = max(1, int(length / (_LAMP_SPACING / density)))
-        for i in range(n_lamps + 1):
-            t = i / max(n_lamps, 1)
-            x, y = start[0] + dx * length * t + nx * offset, start[1] + dy * length * t + ny * offset
+        # Keep clear of the crossing street at each end: the sidewalk
+        # itself stops sidewalk_trim() short of the node, and a lamp placed
+        # at the node (t = 0 / t = 1, as before) stood in the middle of the
+        # crossing street's asphalt - several hundred per Metropole.
+        trim_a, trim_b = street_prop_trims(graph, a, b, fan_radius_by_node)
+        usable = length - trim_a - trim_b
+
+        def along_points(spacing, half_step_offset):
+            if usable <= 0.0:
+                return []   # a stub edge entirely inside its two crossings' clearance
+            n = max(1, int(usable / (spacing / density)))
+            if half_step_offset:
+                return [trim_a + usable * (i + 0.5) / n for i in range(n)]
+            return [trim_a + usable * i / n for i in range(n + 1)]
+
+        for along in along_points(_LAMP_SPACING, half_step_offset=False):
+            x, y = start[0] + dx * along + nx * offset, start[1] + dy * along + ny * offset
             try_place("street_lamp", x, y, rotation_z=math.atan2(dy, dx))
 
-        n_trees = max(1, int(length / (_TREE_STREET_SPACING / density)))
-        for i in range(n_trees + 1):
-            t = (i + 0.5) / max(n_trees, 1)
-            x, y = start[0] + dx * length * t - nx * offset, start[1] + dy * length * t - ny * offset
+        for along in along_points(_TREE_STREET_SPACING, half_step_offset=True):
+            x, y = start[0] + dx * along - nx * offset, start[1] + dy * along - ny * offset
             try_place(rng.choice(tree_ids), x, y, rotation_z=rng.uniform(0, math.tau), scale=rng.uniform(0.85, 1.15))
 
         if preset.cars_enabled and street_class == "local" and length >= _CAR_SPACING:
@@ -134,6 +159,13 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
             if block.area >= _PARK_FOUNTAIN_MIN_AREA:
                 try_place("fountain", cx, cy)
 
+            # Scatter only over the part of the block that keeps a sidewalk's
+            # clearance from every road - the same setback solver the
+            # buildings use. Grid blocks overlap their arterials by up to
+            # ~1.7 m (setback.py), so the full block put trees on the asphalt.
+            hw, hh = setback.shrink_footprint_for_setback(
+                block.center, block.half_size, setback.roads_near(block.center, block.half_size, roads),
+                min_half_size=1.0)
             n_trees = max(1, int(block.area * _PARK_TREE_DENSITY * density))
             for _ in range(n_trees):
                 x, y = cx + rng.uniform(-hw, hw), cy + rng.uniform(-hh, hh)
@@ -145,13 +177,38 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
                 try_place("bench", x, y, rotation_z=rng.uniform(0, math.tau))
 
         elif zone == "commercial" and rng.random() < _SIGN_CHANCE_AT_SHOPFRONT * density:
-            try_place("sign", cx + hw * 0.95, cy, rotation_z=math.pi / 2.0)
+            # At the block's road-cleared edge (see the park case above), not
+            # the raw block edge, which can be asphalt on grid arterials.
+            hw, _hh = setback.shrink_footprint_for_setback(
+                block.center, block.half_size, setback.roads_near(block.center, block.half_size, roads),
+                min_half_size=1.0)
+            try_place("sign", cx + hw, cy, rotation_z=math.pi / 2.0)
 
     if city_radius is not None and city_radius > 0.0:
+        # Street lines run out to (and a little past) the city circle, so
+        # the inner forest ring overlaps their last segments - keep those
+        # trees off the asphalt and sidewalk too.
+        rim = city_radius * _FOREST_RING_START - 2.0 * (preset.street_width_arterial + SIDEWALK_WIDTH)
+        rim_roads = [road for road in roads
+                     if max(math.hypot(road[0], road[1]), math.hypot(road[2], road[3])) >= rim]
         for x, y, scale, rotation_z in plan_forest_ring(city_radius, rng):
+            if setback.road_clearance((x, y, x, y), rim_roads) < SIDEWALK_WIDTH:
+                continue
             try_place(rng.choice(tree_ids), x, y, rotation_z=rotation_z, scale=scale)
 
     return placements
+
+
+def street_prop_trims(graph: StreetGraph, a: int, b: int, fan_radius_by_node: Dict[int, float]) -> Tuple[float, float]:
+    """(trim at node a, trim at node b): how far along an edge the first
+    sidewalk prop may stand from each end node - the crossing street's
+    half width plus its sidewalk (streets.sidewalk_trim) plus a small
+    clearance - or 0 at a dead end. Pure Python, unit-tested."""
+    trims = []
+    for node in (a, b):
+        trim = sidewalk_trim(graph.node_degree.get(node, 0), fan_radius_by_node.get(node, 0.0))
+        trims.append(trim + _END_CLEARANCE if trim > 0.0 else 0.0)
+    return trims[0], trims[1]
 
 
 def plan_forest_ring(city_radius: float, rng: random.Random) -> List[Tuple[float, float, float, float]]:

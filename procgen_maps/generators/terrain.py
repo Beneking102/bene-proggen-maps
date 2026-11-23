@@ -110,6 +110,27 @@ def build_terrain_mesh(params: TerrainParams, collection):
     return obj
 
 
+def reset_terrain_heights(terrain_obj, params: TerrainParams) -> bool:
+    """Put every terrain vertex back on the raw heightmap, undoing any
+    earlier flatten_terrain_for_footprints. Regenerating only the city
+    (new seed, same terrain) used to leave the previous city's flattened
+    building pads in the ground. Returns False (and leaves the mesh alone)
+    if the mesh does not match `params`' grid."""
+    import numpy as np
+
+    mesh = terrain_obj.data
+    res = params.resolution
+    if len(mesh.vertices) != res * res:
+        return False
+    coords = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
+    mesh.vertices.foreach_get("co", coords)
+    coords = coords.reshape(res, res, 3)
+    coords[..., 2] = generate_heightmap(params).astype(np.float32)
+    mesh.vertices.foreach_set("co", coords.ravel())
+    mesh.update()
+    return True
+
+
 def flatten_terrain_for_footprints(terrain_obj, params: TerrainParams, footprints_with_target_z, margin=3.0):
     """Locally flatten the terrain mesh under each (footprint, target_z)
     pair so a building's flat foundation sits flush on the ground instead

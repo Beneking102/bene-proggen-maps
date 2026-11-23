@@ -44,6 +44,9 @@ LIGHTING_PRESETS = {
 class ProcgenMapsSettings(bpy.types.PropertyGroup):
     preset: bpy.props.EnumProperty(name="Preset", items=_PRESET_ITEMS, default="METROPOLE")
     seed: bpy.props.IntProperty(name="Seed", default=0, min=0)
+    validation_summary: bpy.props.StringProperty(
+        name="Validation", default="",
+        description="Result of the last Validate Map run (full report in the system console)")
     use_terrain: bpy.props.BoolProperty(name="Generate Terrain", default=True)
     enable_parks: bpy.props.BoolProperty(name="Parks", default=True)
     enable_commercial: bpy.props.BoolProperty(name="Commercial Zones", default=True)

@@ -4,6 +4,8 @@ No bpy.types classes live in this package (operators live in ui/operators.py);
 register()/unregister() are no-ops kept for the subpackage registration
 contract used by procgen_maps/generators/__init__.py.
 """
+from dataclasses import dataclass
+
 from . import buildings, layout, parking, props, signage, special_buildings, streets, zones  # noqa: F401
 
 CITY_ROOT_COLLECTION_NAME = "ProcgenMaps_City"
@@ -17,14 +19,31 @@ def unregister():
     pass
 
 
-def generate_city(preset, terrain_params=None, seed=None, parent_collection=None):
-    """Run the full layout -> zones -> streets -> buildings -> props pipeline
-    and build all resulting meshes into a fresh 'ProcgenMaps_City' collection
-    hierarchy, nested under `parent_collection` (defaults to the scene's root
-    collection if not given). Returns a dict of the created collections and
-    intermediate data, useful for the profiler and for tests."""
-    import bpy
+@dataclass
+class CityPlan:
+    """Everything the pure-Python planning stages decide before any mesh is
+    built. `plan_city` produces it; `generate_city` builds it; the
+    validator (procgen_maps/validation.py) and the multi-seed fuzz tests
+    check it without Blender."""
+    layout: layout.CityLayout
+    zone_by_block: dict
+    street_graph: streets.StreetGraph
+    building_plans: list
+    special_building_plans: list
+    prop_placements: list
+    sign_placements: list
+    parking_lot_specs: list
 
+    @property
+    def all_building_plans(self):
+        return self.building_plans + self.special_building_plans
+
+
+def plan_city(preset, terrain_params=None, seed=None) -> CityPlan:
+    """Run every pure planning stage (layout -> zones -> street graph ->
+    special/regular buildings -> parking -> props -> signage) and return
+    the plain-data result. No bpy anywhere in here, so this is what the
+    pytest suite runs over many seeds."""
     city_layout = layout.generate_layout(preset, seed=seed)
     zone_by_block = zones.classify_zones(city_layout.blocks, preset, seed=seed)
     street_graph = streets.build_street_graph(city_layout.streets)
@@ -34,16 +53,40 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     regular_blocks = [b for b in city_layout.blocks if b.id not in reserved_block_ids]
     building_plans = buildings.plan_buildings(regular_blocks, zone_by_block, preset, seed=seed,
                                               street_graph=street_graph)
-    parking_lot_specs = parking.plan_parking_lots_for_supermarkets(city_layout.blocks, special_plans)
+    from .setback import roads_from_graph
+    parking_lot_specs = parking.plan_parking_lots_for_supermarkets(
+        city_layout.blocks, special_plans, roads=roads_from_graph(street_graph, preset))
 
     prop_placements = props.plan_props(street_graph, city_layout.blocks, zone_by_block, preset, seed=seed,
                                         terrain_params=terrain_params,
                                         building_plans=building_plans + special_plans,
-                                        city_radius=city_layout.radius)
+                                        city_radius=city_layout.radius,
+                                        parking_lot_specs=parking_lot_specs)
 
     sign_placements = signage.plan_signage(street_graph, preset, seed=seed, terrain_params=terrain_params,
                                             building_plans=building_plans + special_plans,
                                             prop_placements=prop_placements)
+    return CityPlan(city_layout, zone_by_block, street_graph, building_plans, special_plans,
+                    prop_placements, sign_placements, parking_lot_specs)
+
+
+def generate_city(preset, terrain_params=None, seed=None, parent_collection=None):
+    """Run the full layout -> zones -> streets -> buildings -> props pipeline
+    and build all resulting meshes into a fresh 'ProcgenMaps_City' collection
+    hierarchy, nested under `parent_collection` (defaults to the scene's root
+    collection if not given). Returns a dict of the created collections and
+    intermediate data, useful for the profiler and for tests."""
+    import bpy
+
+    plan = plan_city(preset, terrain_params=terrain_params, seed=seed)
+    city_layout = plan.layout
+    zone_by_block = plan.zone_by_block
+    street_graph = plan.street_graph
+    building_plans = plan.building_plans
+    special_plans = plan.special_building_plans
+    prop_placements = plan.prop_placements
+    sign_placements = plan.sign_placements
+    parking_lot_specs = plan.parking_lot_specs
 
     _flatten_terrain_under_buildings(terrain_params, building_plans + special_plans)
 
@@ -69,6 +112,7 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
 
     return {
         "root_collection": root,
+        "plan": plan,
         "layout": city_layout,
         "zone_by_block": zone_by_block,
         "street_graph": street_graph,
@@ -103,10 +147,15 @@ def _flatten_terrain_under_buildings(terrain_params, plans):
     from .. import terrain as terrain_gen
     from ...config import settings as global_settings
 
-    if terrain_params is None or not plans:
+    if terrain_params is None:
         return
     terrain_obj = bpy.data.objects.get(terrain_gen.TERRAIN_OBJECT_NAME)
     if terrain_obj is None:
+        return
+    # Drop the previous city's pads first - otherwise a city-only
+    # regenerate leaves flat rectangles where the old buildings stood.
+    terrain_gen.reset_terrain_heights(terrain_obj, terrain_params)
+    if not plans:
         return
 
     footprints_with_target_z = []

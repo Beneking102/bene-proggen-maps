@@ -81,10 +81,67 @@ def main():
         settings.night_mode = False
         _check("night mode disabled", settings.night_mode is False)
 
+    def datablock_counts():
+        return {attr: len(getattr(bpy.data, attr)) for attr in
+                ("objects", "meshes", "materials", "lights", "curves", "collections", "node_groups")}
+
+    def regenerate_without_leaks():
+        from procgen_maps import validation
+
+        before = datablock_counts()
+        settings.seed = 8
+        bpy.ops.procgen_maps.generate_terrain()
+        bpy.ops.procgen_maps.generate_city()
+        bpy.ops.procgen_maps.generate_dungeon()
+        settings.night_mode = True
+        settings.night_mode = False
+        settings.seed = 7
+        bpy.ops.procgen_maps.generate_terrain()
+        bpy.ops.procgen_maps.generate_city()
+        bpy.ops.procgen_maps.generate_dungeon()
+        after = datablock_counts()
+        grown = {k: after[k] - before[k] for k in before if after[k] > before[k]}
+        _check(f"regenerate (same seed again) does not grow datablocks {grown}", not grown)
+        _check("no orphan datablocks after regenerate", not validation.orphan_datablocks())
+
+    def terrain_reset_on_city_regenerate():
+        import numpy as np
+
+        from procgen_maps.generators import terrain as terrain_gen
+
+        def heights():
+            obj = bpy.data.objects[terrain_gen.TERRAIN_OBJECT_NAME]
+            buf = np.empty(len(obj.data.vertices) * 3, dtype=np.float32)
+            obj.data.vertices.foreach_get("co", buf)
+            return buf.reshape(-1, 3)[:, 2].copy()
+
+        # City-only regenerate with a new seed must not keep the old
+        # city's flattened pads (or the old seed's heights) in the terrain.
+        settings.seed = 9
+        bpy.ops.procgen_maps.generate_city()
+        city_only = heights()
+        bpy.ops.procgen_maps.generate_terrain()
+        bpy.ops.procgen_maps.generate_city()
+        fresh = heights()
+        stale = int(np.sum(np.abs(city_only - fresh) > 0.02))
+        _check(f"terrain matches a fresh terrain+city after city-only regenerate ({stale} stale vertices)", stale == 0)
+        settings.seed = 7
+        bpy.ops.procgen_maps.generate_terrain()
+        bpy.ops.procgen_maps.generate_city()
+
+    def validate_map():
+        result = bpy.ops.procgen_maps.validate_map()
+        _check("validate_map FINISHED", result == {'FINISHED'})
+        _check(f"validate_map reports no issues ({settings.validation_summary})",
+               settings.validation_summary.startswith("OK"))
+
     _run_stage("Generate terrain", generate_terrain)
     _run_stage("Generate city", generate_city)
     _run_stage("Generate dungeon", generate_dungeon)
     _run_stage("Toggle night mode", night_mode)
+    _run_stage("Regenerate without leaks", regenerate_without_leaks)
+    _run_stage("Terrain reset on city regenerate", terrain_reset_on_city_regenerate)
+    _run_stage("Validate map", validate_map)
 
     with tempfile.TemporaryDirectory(prefix="procgen_maps_smoke_") as tmp_dir:
         settings.export_directory = tmp_dir
@@ -114,6 +171,11 @@ def main():
 
     procgen_maps.unregister()
     _check("no leftover Scene.procgen_maps after unregister", not hasattr(bpy.types.Scene, "procgen_maps"))
+    leftover = [name for name in dir(bpy.types) if name.startswith("PROCGEN_")]
+    _check(f"no leftover PROCGEN_* classes after unregister {leftover}", not leftover)
+    procgen_maps.register()
+    procgen_maps.unregister()
+    _check("register/unregister twice is clean", not hasattr(bpy.types.Scene, "procgen_maps"))
 
     print("\n--- Summary ---")
     print(f"Failures: {len(_FAILURES)}")

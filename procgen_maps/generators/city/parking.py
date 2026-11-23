@@ -42,14 +42,23 @@ class ParkingStall:
     rotation_z: float
 
 
-def plan_parking_lots_for_supermarkets(blocks: List[Block], plans: List[BuildingPlan]) -> List[ParkingLotSpec]:
+def plan_parking_lots_for_supermarkets(blocks: List[Block], plans: List[BuildingPlan],
+                                       roads=None) -> List[ParkingLotSpec]:
     """Every supermarket's footprint is a shrunk, block-centered rectangle
     (special_buildings.py's footprint_shrink=0.55) - so shrinking alone
     already frees an equal margin on all 4 sides of the block, including
     the entrance (-Y) side. This turns just that front margin - between the
     block's own front edge and the building's own front wall - into a
     parking lot, skipping any supermarket whose freed strip is too shallow
-    to fit even one row of cars."""
+    to fit even one row of cars.
+
+    With `roads` ((ax, ay, bx, by, width) tuples, see setback.roads_from_graph)
+    the lot's front edge is pulled back so a sidewalk's width stays between
+    it and the street: grid-layout blocks overlap their arterials by up to
+    ~1.7 m (setback.py), so a lot reaching the block's own front edge ran
+    into the asphalt."""
+    from . import setback
+
     block_by_id = {block.id: block for block in blocks}
     specs = []
     for plan in plans:
@@ -67,13 +76,19 @@ def plan_parking_lots_for_supermarkets(blocks: List[Block], plans: List[Building
         block_hw, block_hh = block.half_size
         front_edge = block_cy - block_hh
 
+        lot_half_width = (max_x - min_x) / 2.0 * 0.9
+        if roads:
+            rect = (block_cx - lot_half_width, front_edge, block_cx + lot_half_width, building_min_y)
+            clearance = setback.road_clearance(rect, setback.roads_near(block.center, block.half_size, roads))
+            if clearance < setback.SIDEWALK_WIDTH:
+                front_edge += setback.SIDEWALK_WIDTH - clearance
+
         freed_depth = building_min_y - front_edge
         if freed_depth < _MIN_FREED_DEPTH:
             continue
 
         lot_half_depth = freed_depth / 2.0
         lot_cy = front_edge + lot_half_depth
-        lot_half_width = (max_x - min_x) / 2.0 * 0.9
         specs.append(ParkingLotSpec(plan.block_id, block_cx, lot_cy, lot_half_width, lot_half_depth))
     return specs
 

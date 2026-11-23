@@ -38,6 +38,12 @@ class PROCGEN_PT_main_panel(bpy.types.Panel):
         layout.separator()
         layout.prop(settings, "night_mode", toggle=True)
 
+        layout.separator()
+        layout.operator("procgen_maps.validate_map", icon='CHECKMARK')
+        if settings.validation_summary:
+            layout.label(text=settings.validation_summary,
+                         icon='CHECKMARK' if settings.validation_summary.startswith("OK") else 'ERROR')
+
 
 class PROCGEN_PT_export_panel(bpy.types.Panel):
     bl_label = "Export"

@@ -34,6 +34,7 @@ STREETS_PREFIX = "ProcgenMaps_Street"
 
 CURB_HEIGHT = 0.12            # meters the sidewalk surface sits above the asphalt
 ROAD_LIFT = 0.05              # meters above terrain, avoids z-fighting with the ground
+FAN_LIFT = 0.01               # meters an intersection fan sits above the strips it covers (coplanar = z-fighting)
 _SIDEWALK_MIN_LENGTH = 1.0    # meters; shorter leftover sidewalk pieces (tiny blocks) are skipped
 
 
@@ -295,12 +296,12 @@ def _build_intersection_fan(name, center, radius, height_at, sides=8, material=N
     data = _RoadMeshData()
     no_marks = (0.0, road_mat.NO_MARKINGS_V)
     no_ends = (road_mat.ROAD_END_SENTINEL, road_mat.ROAD_END_SENTINEL)
-    data.add_vert((cx, cy, height_at(cx, cy)), no_marks, no_ends)
+    data.add_vert((cx, cy, height_at(cx, cy) + FAN_LIFT), no_marks, no_ends)
     for i in range(sides):
         angle = (2 * math.pi * i) / sides
         px = cx + radius * math.cos(angle)
         py = cy + radius * math.sin(angle)
-        data.add_vert((px, py, height_at(px, py)), no_marks, no_ends)
+        data.add_vert((px, py, height_at(px, py) + FAN_LIFT), no_marks, no_ends)
     for i in range(sides):
         data.add_face((0, i + 1, (i + 1) % sides + 1), 0)
 

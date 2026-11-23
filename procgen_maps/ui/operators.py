@@ -540,6 +540,36 @@ class PROCGEN_OT_render_interior(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class PROCGEN_OT_validate_map(bpy.types.Operator):
+    bl_idname = "procgen_maps.validate_map"
+    bl_label = "Validate Map"
+    bl_description = ("Re-plan the current preset/seed and check it for overlaps (buildings, roads, "
+                      "props, signs, parking), disconnected streets, floating/buried objects and orphan "
+                      "datablocks; summary in the panel, full report in the system console")
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        from .. import validation
+
+        settings = context.scene.procgen_maps
+        preset = _apply_toggle_overrides(preset_config.get_preset(settings.preset), settings)
+        terrain_params = _get_terrain_params(context.scene) if settings.use_terrain else None
+
+        report = None
+        if bpy.data.collections.get(city_gen.CITY_ROOT_COLLECTION_NAME) is not None:
+            # plan_city is deterministic for (preset, seed), so this is the
+            # exact plan the generated city was built from.
+            plan = city_gen.plan_city(preset, terrain_params=terrain_params, seed=settings.seed)
+            report = validation.validate_city_plan(plan, preset)
+        report = validation.validate_scene(terrain_params, report=report)
+
+        text = report.format()
+        print("[Procgen Maps] Validate Map\n" + text)
+        settings.validation_summary = report.summary()
+        self.report({'INFO'} if report.ok else {'WARNING'}, report.summary())
+        return {'FINISHED'}
+
+
 classes = (
     PROCGEN_OT_generate_terrain,
     PROCGEN_OT_generate_city,
@@ -553,6 +583,7 @@ classes = (
     PROCGEN_OT_export_json,
     PROCGEN_OT_render_showcase,
     PROCGEN_OT_render_interior,
+    PROCGEN_OT_validate_map,
 )
 
 

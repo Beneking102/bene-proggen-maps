@@ -266,10 +266,15 @@ def plan_signage(graph: StreetGraph, preset, seed=None, terrain_params=None,
             continue
         ax, ay = dx / length, dy / length
         perp_x, perp_y = -ay, ax
-        offset = min(max(preset.street_width_arterial, preset.street_width_local) / 2.0 + 1.5, length * 0.4)
-        x = node_pos[0] + perp_x * offset
-        y = node_pos[1] + perp_y * offset
-        try_place("traffic_light", x, y, rotation_z=0.0)
+        # On the corner: back along the approach *and* out to its curb.
+        # Offsetting only sideways (as before) walks from the node along
+        # the crossing street's centerline, i.e. the pole stood in the
+        # middle of the crossing arterial's asphalt.
+        setback = min(max(preset.street_width_arterial, preset.street_width_local) / 2.0 + 1.5, length * 0.4)
+        side_offset = preset.street_width_arterial / 2.0 + 1.0
+        x = node_pos[0] - ax * setback + perp_x * side_offset
+        y = node_pos[1] - ay * setback + perp_y * side_offset
+        try_place("traffic_light", x, y, rotation_z=_facing_to_rotation_z(-ax, -ay))
 
     # Speed-limit repeater signs: per-edge, independent of prop_density
     # (a traffic-logic rule, not a decorative-density knob).
