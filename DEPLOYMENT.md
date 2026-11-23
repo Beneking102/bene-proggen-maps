@@ -27,9 +27,12 @@ scene.procgen_maps.seed = 42
 
 bpy.ops.procgen_maps.generate_terrain()
 bpy.ops.procgen_maps.generate_city()
+scene.procgen_maps.dungeon_theme = "castle"     # crypt | cave | castle
+scene.procgen_maps.dungeon_levels = 2
 bpy.ops.procgen_maps.generate_dungeon()
 
 scene.procgen_maps.export_directory = "//export/"
+scene.procgen_maps.export_naming = "GODOT"        # or "UNITY"
 bpy.ops.procgen_maps.export_gltf()
 bpy.ops.procgen_maps.export_json()
 
@@ -89,7 +92,25 @@ rather than fighting the global settings for city-shape changes.
 
 - **glTF/GLB**: wraps Blender's built-in glTF exporter
   (`bpy.ops.export_scene.gltf`), which ships with every Blender 4.2+
-  install - no extra setup needed.
+  install - no extra setup needed. Since v0.14 it is a game-engine export
+  (`exporters/game_export.py`): set `scene.procgen_maps.export_naming`
+  (`GODOT` / `UNITY`), `export_collision`, `export_lods`,
+  `export_walkable` before calling `bpy.ops.procgen_maps.export_gltf()`.
+  The GLB then holds `City` / `Terrain` / `Dungeon` root nodes,
+  colliders (Godot: `Ground-col`, `Streets-col`, `<room>-col` trimesh
+  colliders and `<building>-colonly` / `<prop>-colonly` boxes, which
+  Godot's scene importer turns into StaticBody3D collision shapes;
+  Unity: `_col` boxes under a `Collision` group - add BoxColliders with
+  a one-line editor script, large meshes get MeshColliders by hand),
+  `_LOD0`/`_LOD1` siblings under every building and prop instance (Unity
+  builds LODGroups from that automatically; Godot users can key visibility
+  ranges off the names), and `Ground_Walkable` / `Dungeon_Walkable`
+  (`-navmesh` in Godot = a NavigationRegion3D; `_navmesh` in Unity = bake
+  a NavMesh from it). Custom properties travel as glTF `extras`, lights
+  as `KHR_lights_punctual`. Expect ~40 MB and ~5 s for a Dorf with all
+  options on; the scene in Blender is unchanged after the export.
+  `game_export.verify_glb(path)` re-imports a GLB headlessly and returns
+  the counts (objects, collision, lod0/lod1, walkable, roots).
 - **FBX**: wraps `bpy.ops.export_scene.fbx`, part of Blender's bundled
   `io_scene_fbx` add-on, which must be *enabled* (Preferences > Add-ons)
   even though it ships with Blender. `exporters/fbx_export.py`'s

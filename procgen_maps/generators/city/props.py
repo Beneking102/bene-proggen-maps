@@ -110,6 +110,8 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         return True
 
     for (a, b, street_class) in graph.edges:
+        if street_class == "country":
+            continue   # no lamps, street trees or parked cars out in the country
         start, end = graph.nodes[a], graph.nodes[b]
         length = math.hypot(end[0] - start[0], end[1] - start[1])
         if length < 1e-6:

@@ -49,3 +49,16 @@ def test_pack_rects_sheet_covers_largest_rect():
 def test_bake_atlas_image_not_implemented():
     with pytest.raises(NotImplementedError):
         atlas.bake_atlas_image("atlas", [], [])
+
+
+def test_snow_line_is_a_high_percentile_of_the_heightmap():
+    import numpy as np
+
+    from procgen_maps.materials.terrain_mat import SNOW_PERCENTILE, snow_line_height
+
+    heights = np.linspace(0.0, 80.0, 1000).reshape(20, 50)
+    snow_z = snow_line_height(heights)
+    assert 70.0 < snow_z < 76.0 and SNOW_PERCENTILE >= 90.0
+    assert (heights > snow_z).mean() < 0.1
+    # Gentle city terrain (22 m of relief) never gets snow.
+    assert snow_line_height(np.linspace(0.0, 22.0, 1000)) == float("inf")

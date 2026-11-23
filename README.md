@@ -57,7 +57,15 @@ and exports them to common interchange formats. Targets Blender 4.2+
   hierarchy, not random density), each a bespoke mesh+text object
   (`procgen_maps/generators/city/signage.py`).
 - **Separate BSP dungeon generator**, independent of the city/terrain
-  pipeline - rooms and corridors from binary space partitioning.
+  pipeline - rooms and corridors from binary space partitioning, on two
+  (up to four) stacked levels joined by staircases, in a crypt, cave or
+  castle theme with doors, theme props, wall torches and a soft fill
+  light per room (`procgen_maps/generators/dungeon.py`).
+- **Countryside**: a country road leaves the city to the map edge with
+  a small village of cottages along it, and the terrain shader turns
+  from city grass to a drier meadow band, a dark forest floor under the
+  tree ring, rock on slopes and snow on the highest peaks
+  (`generators/city/countryside.py`, `materials/terrain_mat.py`).
 - **Procedural placeholder props**: 12 tree variants, a street lamp, a
   bench, a parked car, and a sign, all built from primitive geometry.
   Real 3D asset modeling is explicitly out of scope for this codebase (see
@@ -97,8 +105,15 @@ and exports them to common interchange formats. Targets Blender 4.2+
   (`procgen_maps/validation.py`).
 - **Dungeon halls**: large BSP rooms get pillar grids, the boss room a
   central dais, and the stone materials noise grain and bump.
-- **Export** to glTF/GLB, FBX, USDZ, a top-down SVG map, and a JSON stats
-  sidecar.
+- **Game-engine export**: the glTF/GLB export writes a City / Terrain /
+  Dungeon hierarchy with readable names, box colliders for every
+  building and prop plus trimesh colliders for ground, streets, bridges
+  and dungeon rooms (Godot `-col`/`-colonly`/`-navmesh` or Unity `_col`
+  naming), `_LOD0`/`_LOD1` groups for buildings and prop instances, and
+  a navmesh-friendly walkable ground / dungeon floor mesh - toggled in
+  the Export panel, and the Blender scene is left untouched
+  (`procgen_maps/exporters/game_export.py`). Also FBX, USDZ, a top-down
+  SVG map, and a JSON stats sidecar.
 - **N-panel UI** under `View3D > Sidebar > Procgen Maps`, with a profiler
   readout (object/vertex/face counts, last generate time).
 
@@ -128,8 +143,11 @@ details.
    Dungeon** - each is independent and can be run on its own.
 4. Toggle **Night Mode** to switch on the lit windows and street lamp
    lights; **River** (on by default) runs a bridged river through the city.
+   The dungeon's theme and level count sit under its button.
 5. Open the **Export** sub-panel to write glTF, FBX, USDZ, SVG, or JSON
-   output to the configured export directory.
+   output to the configured export directory; the *Game Engine* box
+   picks Godot or Unity naming and toggles colliders, LODs and the
+   walkable ground for the glTF export.
 6. **Validate Map** checks the result for placement problems; regenerating
    the city on an existing terrain is safe (the terrain is re-leveled
    before the new buildings' pads are flattened in).

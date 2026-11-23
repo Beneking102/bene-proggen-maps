@@ -43,6 +43,7 @@ CURB_HEIGHT = 0.12            # meters the sidewalk surface sits above the aspha
 ROAD_LIFT = 0.05              # meters above terrain, avoids z-fighting with the ground
 FAN_LIFT = 0.01               # meters an intersection fan sits above the strips it covers (coplanar = z-fighting)
 SIDEWALK_SKIRT = 0.6          # meters the sidewalk's outer edge extends down into the ground (hides the road-bed step)
+COUNTRY_SHOULDER = 0.6        # meters of sunk ground beside a country road's asphalt (no sidewalk; an asphalt skirt hides the step)
 _SIDEWALK_MIN_LENGTH = 1.0    # meters; shorter leftover sidewalk pieces (tiny blocks) are skipped
 
 
@@ -196,11 +197,12 @@ def corner_sidewalk_paths(node, outgoing, fan_radius, arc_segments=6):
 
 def road_corridors(graph: StreetGraph, preset):
     """(ax, ay, bx, by, half_width) per edge, half_width covering asphalt plus
-    both sidewalks - the ground footprint every street object occupies.
+    both sidewalks - the ground footprint every street object occupies
+    (a country road has no sidewalks: asphalt plus its skirt).
     generators/terrain.py's lower_terrain_under_corridors uses it so the
     terrain mesh never pokes through the road surface."""
     return [(graph.nodes[a][0], graph.nodes[a][1], graph.nodes[b][0], graph.nodes[b][1],
-             _edge_half_width(street_class, preset) + SIDEWALK_WIDTH)
+             _edge_half_width(street_class, preset) + (COUNTRY_SHOULDER if street_class == "country" else SIDEWALK_WIDTH))
             for (a, b, street_class) in graph.edges]
 
 
@@ -243,9 +245,10 @@ def build_street_meshes(graph: StreetGraph, preset, terrain_params=None, collect
             data, graph.nodes[a], graph.nodes[b], width, height_at,
             crosswalk_ends=(degree_a >= 3, degree_b >= 3), fan_radii=(radius_a, radius_b),
             sidewalk_trims=(sidewalk_trim(degree_a, radius_a), sidewalk_trim(degree_b, radius_b)),
-            lanes=2.0 if arterial else 1.0)
+            lanes=2.0 if arterial else 1.0, with_sidewalks=street_class != "country")
 
     outgoing_by_node = defaultdict(list)
+    country_nodes = defaultdict(lambda: True)   # True while every edge at the node is a country road
     for (a, b, street_class) in graph.edges:
         (ax, ay), (bx, by) = graph.nodes[a], graph.nodes[b]
         length = math.hypot(bx - ax, by - ay) or 1.0
@@ -253,11 +256,18 @@ def build_street_meshes(graph: StreetGraph, preset, terrain_params=None, collect
         half = _edge_half_width(street_class, preset)
         outgoing_by_node[a].append((direction, half))
         outgoing_by_node[b].append(((-direction[0], -direction[1]), half))
+        country_nodes[a] &= street_class == "country"
+        country_nodes[b] &= street_class == "country"
 
     for node_index, degree in graph.node_degree.items():
         if degree < 2:
             continue
         outgoing = outgoing_by_node[node_index]
+        if country_nodes[node_index]:
+            # A bend of the country road: the asphalt fan only, no sidewalk corners.
+            _build_node_mesh(data, graph.nodes[node_index], fan_radius_by_node[node_index], [], height_at,
+                             with_fan=True)
+            continue
         # A fan covers every crossing and every bend; a straight-through
         # node (two collinear edges) needs none, its strips already meet.
         straight = degree == 2 and abs(outgoing[0][0][0] * outgoing[1][0][0]
@@ -326,7 +336,7 @@ class _RoadMeshData:
 
 
 def _build_road_strip(data, start, end, width, height_at, crosswalk_ends=(False, False), fan_radii=(0.0, 0.0),
-                      sidewalk_trims=(0.0, 0.0), lanes=1.0):
+                      sidewalk_trims=(0.0, 0.0), lanes=1.0, with_sidewalks=True):
     """A single quad spanning the whole edge only samples terrain height at
     its 4 corners - fine for a short block face, but a long arterial can
     run for 100+ meters, and the terrain can undulate meaningfully between
@@ -377,10 +387,28 @@ def _build_road_strip(data, start, end, width, height_at, crosswalk_ends=(False,
         (l0, r0), (l1, r1) = ring[i], ring[i + 1]
         data.add_face((l0, r0, r1, l1), 0, width=width, lanes=lanes)
 
+    no_ends = (road_mat.ROAD_END_SENTINEL, road_mat.ROAD_END_SENTINEL)
+    if not with_sidewalks:
+        # Country road: no sidewalk, but a skirt down from both asphalt
+        # edges so the sunk road bed never shows as a trench beside it.
+        for side in (1.0, -1.0):
+            edge = [ring[i][0 if side > 0 else 1] for i in range(segment_count + 1)]
+            feet = []
+            for i in range(segment_count + 1):
+                along = length * i / segment_count
+                px, py = point_at(along, side * half)
+                feet.append(data.add_vert((px, py, height_at(px, py) - SIDEWALK_SKIRT), (along, side * half),
+                                          no_ends))
+            for i in range(segment_count):
+                if side > 0:
+                    data.add_face((edge[i], edge[i + 1], feet[i + 1], feet[i]), 0, width=0.0, lanes=0.0)
+                else:
+                    data.add_face((edge[i + 1], edge[i], feet[i], feet[i + 1]), 0, width=0.0, lanes=0.0)
+        return
+
     # Sidewalks + curbs: material 1. No crosswalk/marking data needed (the
     # sidewalk shader only reads the along/across UV for its paving joints),
     # so their end UVs just carry the sentinel.
-    no_ends = (road_mat.ROAD_END_SENTINEL, road_mat.ROAD_END_SENTINEL)
     walk_start = sidewalk_trims[0]
     walk_end = length - sidewalk_trims[1]
     if walk_end - walk_start >= _SIDEWALK_MIN_LENGTH:

@@ -305,8 +305,11 @@ class PROCGEN_OT_generate_terrain(bpy.types.Operator):
         settings = context.scene.procgen_maps
         profiler = Profiler()
         params = _get_terrain_params(context.scene)
+        preset = preset_config.get_preset(settings.preset)
         with profiler.stage("terrain"):
-            terrain_mat.get_or_create_terrain_material(params.max_height)
+            terrain_mat.get_or_create_terrain_material(params.max_height, preset.radius)
+            terrain_mat.set_terrain_biomes(
+                preset.radius, terrain_mat.snow_line_height(terrain_gen.generate_heightmap(params)))
             obj = terrain_gen.build_terrain_mesh(params, _root_collection())
             mat = bpy.data.materials.get(terrain_mat.TERRAIN_MATERIAL_NAME)
             if mat is not None and mat.name not in obj.data.materials.keys():

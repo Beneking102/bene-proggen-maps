@@ -89,11 +89,27 @@ the module. The same split shows up in every generator: `layout.py`
 data with callables that return plain dicts).
 
 The dungeon generator (`generators/dungeon.py`) follows the identical
-pattern: `DungeonParams` (a frozen dataclass, `seed` plus BSP tuning
-fields) and `generate_dungeon(params) -> DungeonLayout` are pure Python;
-`build_dungeon_mesh(layout, collection)` and `clear_dungeon()` are the bpy
-build/teardown pair, called from `ui/operators.py`'s
-`PROCGEN_OT_generate_dungeon.execute()`.
+pattern: `DungeonParams` (a frozen dataclass: `seed`, BSP tuning fields,
+`theme`, `levels`) and `generate_dungeon(params) -> DungeonLayout` are
+pure Python - one BSP `generate_level` per level, `plan_stairs` picking
+the (upper room, lower room) pair whose plan-view overlap fits a flight,
+`plan_room_features` / `plan_room_props` / `wall_torch_positions` for
+pillars, theme props and torches, and `validate_dungeon` (room overlaps,
+connectivity per level, stairs inside both rooms and clear of pillars)
+for the fuzz tests; `build_dungeon_mesh(layout, collection)` and
+`clear_dungeon()` are the bpy build/teardown pair, called from
+`ui/operators.py`'s `PROCGEN_OT_generate_dungeon.execute()`. Level `k`
+is built at `z = -k * (wall_height + LEVEL_SLAB)`; the upper room's
+floor and the lower room's ceiling get a hole over the stair rect
+(`_quads_minus_holes`) with a shaft between them.
+
+`exporters/game_export.py` is the same split one more time: naming
+(`collision_name`, `lod_name`, `walkable_name`), `box_corners` and the
+terrain `downsample_grid` are pure and unit-tested; `export_game_gltf`
+does temporary scene surgery (hierarchy empties, collider / LOD /
+walkable objects, renames, instance-collection swaps) around one
+`bpy.ops.export_scene.gltf` call and `_Surgery.restore` puts every
+name, parent and datablock back - an export never changes the scene.
 
 ## Generation dataflow
 
@@ -113,11 +129,15 @@ pipeline, each stage consuming the previous stage's plain-data output:
 ```
 CityPreset
   -> layout.generate_layout        (Block[], StreetSegment[])       [grid|raster]
+  -> countryside.plan_country_road (StreetSegment[] of class "country", appended: the road
+                                    from the eastern edge node to the map edge)
   -> zones.classify_zones          ({block_id: zone_name})
   -> streets.build_street_graph    (StreetGraph: nodes/edges/degree)
   -> special_buildings.plan_special_buildings / buildings.plan_buildings
                                    (BuildingPlan[]; both take the StreetGraph and
                                     pull footprints back from the roads via setback.py)
+  -> countryside.plan_village      (BuildingPlan[] of cottages along the country road,
+                                    appended to the regular building plans)
   -> parks.plan_parks              (ParkSpec[]: park with a path cross, or plaza)
   -> props.plan_props              (PropPlacement[]; + forest ring outside layout.radius;
                                     keeps off the river/banks and the park paths)
@@ -138,6 +158,14 @@ those are the bridges (`water.bridge_edges`), so the street graph stays
 one component. Water plus bank keep clear of the two bounding streets by
 construction. `preset.water` ("river"/"none"; the panel's River toggle
 sets "none") turns it off.
+
+The **country road** (`countryside.py`) is the third street class,
+`"country"`: `streets.build_street_meshes` builds it without sidewalks
+(an asphalt skirt instead, `COUNTRY_SHOULDER` in `road_corridors`),
+`props.plan_props` places no lamps/trees/cars along it, signage gives
+it a 100 km/h limit, and everything else (terrain bed, forest ring
+clearance, the validator's road rules) treats it like any road. The
+village's cottages carry block ids from `VILLAGE_BLOCK_ID_BASE` up.
 
 Buildings' night lighting is planned per floor and per face in
 `buildings.plan_floor_lighting` / `window_lighting` (pure Python): a
@@ -173,7 +201,10 @@ sunk 2.6 m under the river with the bank as the blend
 per-mesh UV data rather than duplicated per object: `city_mat.py`
 (facade + window glass + roof), `road_mat.py` (asphalt with markings,
 sidewalk concrete; driven by the `ProcgenMaps_Road`/`ProcgenMaps_RoadEnds`
-UV maps and `procgen_maps_road_*` properties), `terrain_mat.py`,
+UV maps and `procgen_maps_road_*` properties), `terrain_mat.py` (biomes: a
+meadow band and the forest floor by radial distance, rock by slope, snow
+above a per-terrain snow line - `set_terrain_biomes` retunes the three named
+Map Range nodes after every Generate Terrain),
 `prop_mat.py` (per-instance variation through Object Info > Random),
 `dungeon_mat.py`. Every outdoor material's surface shader is routed
 through `atmosphere.py`'s single `ProcgenMaps_AerialPerspective` node
@@ -264,6 +295,8 @@ read back with `obj.get("key")`):
 | `procgen_maps_water`, `procgen_maps_bridges`, `procgen_maps_parks` | the water / bridges / parks objects | marker properties (kind, bridge count, park count) |
 | `procgen_maps_street_class` | the street-network object | `"network"` (marks it for validation's ground-contact check); `procgen_maps_street_edges` / `_nodes` carry the graph size |
 | `procgen_maps_road_width`, `procgen_maps_road_lanes` | per-face float *mesh attributes* on the street-network object | meters / 1 (local) or 2 (arterial), 0 on sidewalks and fans; drive the asphalt shader's marking layout (Attribute node, GEOMETRY mode) |
+| `procgen_maps_room_id`, `procgen_maps_room_type`, `procgen_maps_level` | dungeon room objects | BSP room id, `start`/`boss`/`normal`, level index (0 = top) |
+| `procgen_maps_stairs` | dungeon stairs objects | the `Stairs.id` joining two levels |
 | `procgen_maps_asset_id` | prop Empties | which `assets/library.py` entry this instance is, e.g. `"street_lamp"` - also used to find lamps for Night Mode's point lights |
 | `procgen_maps_lod_detail` | prop Empties | current LOD tier (`"high"`/`"medium"`/`"low"`), compared against in `update_lod` to skip no-op re-assignments |
 
@@ -280,10 +313,15 @@ read back with `obj.get("key")`):
   determinism and the regression tests behind each validator rule.
   `test_city_visuals.py` covers the v0.13 planning: night-window runs,
   roof shapes, parks/plazas, the river (bridges, connectivity, no lots in
-  water, the validator rules) and the road-bed profile.
+  water, the validator rules) and the road-bed profile, plus the v0.14
+  country road / village rules. The dungeon's `validate_dungeon` runs
+  over 50 seeds x 3 themes in `test_validation.py`; `test_exporters.py`
+  pins the game-export naming conventions and the terrain downsample.
 - `procgen_maps/tests/blender_integration/run_smoke_tests.py`: a separate
   headless-Blender script that exercises the bpy-dependent "build" half
   (mesh building, material node setup, collection linking, the exporters)
   by actually running inside `blender --background`, since that half is
-  by design not importable from plain pytest. See `DEPLOYMENT.md` for how
-  to invoke Blender headlessly.
+  by design not importable from plain pytest. It also re-imports the
+  exported GLB (`game_export.verify_glb`) and checks the roots, collider,
+  LOD and walkable counts, and that the scene is unchanged afterwards.
+  See `DEPLOYMENT.md` for how to invoke Blender headlessly.

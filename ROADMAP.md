@@ -37,7 +37,7 @@ entry with renders. Order and scope may shift, but the themes are fixed.
 - [ ] Large-map mode (chunked generation), runtime-budget tests, memory
   measurements.
 
-## v0.13 - City visuals (this release)
+## v0.13 - City visuals (shipped)
 
 - [x] Night windows: contiguous lit apartments/floors instead of a
   checkerboard, warm and cool light temperatures, dark floors.
@@ -53,13 +53,30 @@ entry with renders. Order and scope may shift, but the themes are fixed.
   beyond park benches/lamps this round.
 - [ ] Metropole under 4 s (carried over from v0.12; see OPTIMIZATION.md).
 
-## v0.14 - World, dungeon, game export
+## v0.14 - World, dungeon, game export (this release)
 
-- Terrain biomes, city-to-countryside transitions, country roads to
-  villages.
-- Dungeon: themes, doors, multiple levels with stairs, better lighting.
-- Game-engine export: collision meshes, LODs in glTF, Unity/Godot-friendly
-  hierarchy, navmesh-friendly floors.
+- [x] Game-engine glTF export (`exporters/game_export.py`): a
+  City/Terrain/Dungeon hierarchy, box colliders for buildings and props
+  and trimesh colliders for ground/streets/dungeon rooms in Godot
+  (`-col`/`-colonly`/`-navmesh`) or Unity (`_col`, `Collision` group)
+  naming, `_LOD0`/`_LOD1` groups for buildings and prop instances, a
+  navmesh-friendly `Ground_Walkable` (downsampled terrain + streets +
+  park paths) and `Dungeon_Walkable` mesh. Options in the Export panel;
+  the smoke test re-imports the GLB and checks the result.
+- [x] Dungeon: crypt / cave / castle themes (materials, sarcophagi,
+  boulders, banners), doors with lintels in every doorway, two stacked
+  levels joined by a staircase through the floor, wall torches plus a dim
+  fill light per room; `validate_dungeon` fuzzed over 50 seeds x 3 themes.
+- [x] World: meadow / forest-floor / rock / snow biomes in the terrain
+  shader (distance from the city, slope, a per-terrain snow line), a
+  country road from the city's edge to the map edge (no sidewalks, an
+  asphalt skirt) with a small village of cottages along it - all part of
+  the street graph / building plans, so Validate Map covers them.
+- [x] Bridges read as bridges (post railings on a low parapet, deck
+  fascia, arched soffit); balcony railings are light and slim.
+- [ ] Not done: MSFT_lod extension (separate LOD objects only), convex
+  hull colliders (boxes only), a lake, more than one country road.
+- [ ] Metropole under 4 s (carried over; see OPTIMIZATION.md).
 
 ## v0.15 - Polish and release
 

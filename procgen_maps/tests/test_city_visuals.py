@@ -208,3 +208,87 @@ def test_corridor_lowering_without_shoulder_is_the_old_profile():
     dist = np.array([0.0, 2.0, 3.0, 4.0])
     amount = corridor_lowering(dist, half_width=3.0, depth=2.6, shallow_depth=2.6, shoulder=0.0, margin=2.0)
     assert list(amount) == pytest.approx([2.6, 2.6, 2.6, 1.3])
+
+
+# --- countryside: country road and village (v0.14) ---------------------------
+
+import math
+import random as _random
+
+from procgen_maps.generators.city.countryside import (COUNTRY_CLASS, VILLAGE_BLOCK_ID_BASE, country_road_points,
+                                                      plan_country_road, plan_village)
+from procgen_maps.generators.city.setback import SIDEWALK_WIDTH, road_clearance, roads_from_graph
+from procgen_maps.generators.city.streets import road_corridors
+from procgen_maps.validation import street_components
+
+
+@pytest.mark.parametrize("key", list(PRESETS))
+def test_country_road_leaves_the_city_to_the_map_edge_and_stays_connected(key):
+    preset = PRESETS[key]
+    world_half = max(1000.0, preset.radius * 4.2) / 2.0
+    for seed in (0, 4, 12):
+        plan = plan_city(preset, terrain_params=TerrainParams(world_size=world_half * 2, seed=seed), seed=seed)
+        country = [e for e in plan.street_graph.edges if e[2] == COUNTRY_CLASS]
+        assert country, seed
+        far_x = max(plan.street_graph.nodes[n][0] for e in country for n in e[:2])
+        assert far_x >= world_half - 16.0, (seed, far_x)
+        assert len(street_components(plan.street_graph)) == 1
+        points = country_road_points(plan.layout)
+        assert points[0][0] <= points[-1][0] and all(abs(p[1]) < world_half for p in points)
+        assert math.hypot(*points[0]) <= preset.radius * 1.05 + preset.block_size
+
+
+def test_country_road_without_room_is_skipped():
+    preset = PRESETS["DORF"]
+    layout = generate_layout(preset, seed=1)
+    assert plan_country_road(layout, preset, _random.Random(1), preset.radius * 1.02) == []
+
+
+def test_village_cottages_keep_clear_of_the_road_and_each_other():
+    preset = PRESETS["KLEINSTADT"]
+    plan = plan_city(preset, terrain_params=TerrainParams(world_size=preset.radius * 4.2, seed=4), seed=4)
+    village = plan.village_plans
+    assert village and all(p.facade.key == "cottage" for p in village)
+    assert all(p.block_id >= VILLAGE_BLOCK_ID_BASE for p in village)
+    roads = roads_from_graph(plan.street_graph, preset)
+    rects = []
+    for cottage in village:
+        xs = [q[0] for q in cottage.footprint]
+        ys = [q[1] for q in cottage.footprint]
+        rect = (min(xs), min(ys), max(xs), max(ys))
+        assert road_clearance(rect, roads) >= 1.0
+        assert preset.radius * 1.2 <= math.hypot((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2) <= preset.radius * 1.9
+        rects.append(rect)
+    for i, a in enumerate(rects):
+        for b in rects[i + 1:]:
+            assert a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
+    assert all(p in plan.building_plans for p in village)
+
+
+def test_country_road_corridor_has_no_sidewalk_width():
+    from procgen_maps.generators.city.layout import StreetSegment
+    from procgen_maps.generators.city.streets import COUNTRY_SHOULDER, build_street_graph
+    preset = PRESETS["DORF"]
+    graph = build_street_graph([StreetSegment(0, (0.0, 0.0), (50.0, 0.0), "local"),
+                                StreetSegment(1, (50.0, 0.0), (120.0, 10.0), COUNTRY_CLASS)])
+    halves = {street_class: half for (ax, ay, bx, by, half), (_a, _b, street_class)
+              in zip(road_corridors(graph, preset), graph.edges)}
+    assert halves["local"] == preset.street_width_local / 2.0 + SIDEWALK_WIDTH
+    assert halves[COUNTRY_CLASS] == preset.street_width_local / 2.0 + COUNTRY_SHOULDER
+
+
+def test_no_street_props_along_the_country_road():
+    preset = PRESETS["DORF"]
+    plan = plan_city(preset, seed=2)
+    country = [e for e in plan.street_graph.edges if e[2] == COUNTRY_CLASS]
+    nodes = plan.street_graph.nodes
+    for placement in plan.prop_placements:
+        if placement.asset_id not in ("street_lamp", "parked_car"):
+            continue
+        x, y = placement.location[0], placement.location[1]
+        for a, b, _cls in country:
+            (ax, ay), (bx, by) = nodes[a], nodes[b]
+            if ax < x - 20.0:   # only the road pieces beyond the city edge
+                dx, dy = bx - ax, by - ay
+                t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+                assert math.hypot(x - (ax + t * dx), y - (ay + t * dy)) > 4.0

@@ -6,7 +6,92 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.13.0 — Night windows that read as homes, balconies and shops, parks, a river with bridges (current)
+## v0.14.0 — World, dungeon, game export (current)
+
+The "what is it for" release: the generated map now goes into a game
+engine as something a character can walk on, the dungeon is a dungeon
+(themes, doors, two levels with a staircase, light), and the city sits
+in a landscape instead of on a green disc. `pytest` (246 tests), the
+headless smoke test (which now re-imports the exported GLB) and the
+50-seed x 4-preset fuzz validator are green; the dungeon has its own
+50-seed x 3-theme fuzz over `validate_dungeon`.
+
+**Bridges and balconies (the v0.13 review).** The bridge railings were
+one 1.1 m solid box per side and read as a concrete wall; now each side
+is a 0.35 m parapet kerb with posts every 2 m, a mid rail and a top
+rail, the deck has a fascia band along its edge and an arched soffit
+from the deck down to the pier, so the bridge reads as a bridge from
+the river side. Balcony railings were a full-height near-black box;
+they are a slim panel to two thirds of the height plus a top rail in a
+light grey trim material (also used for rooftop gear).
+
+**Game-engine export** (`exporters/game_export.py`). The glTF export is
+now a game export: every generated object is parented under `City` /
+`Terrain` / `Dungeon` root nodes with readable group names; every
+building becomes a `<name>` group with `<name>_LOD0` (the facade mesh)
+and `<name>_LOD1` (one box in the same facade shading), every prop
+instance expands to `<asset>_LOD0` / `_LOD1` (its high and low detail
+master meshes, still shared); buildings and props get box colliders
+(trees: trunk only, so agents walk under the canopy), the terrain,
+streets, bridges, park paths and dungeon rooms are trimesh colliders;
+and `Ground_Walkable` (the terrain downsampled to ~160 vertices a side
+plus streets and park paths) and `Dungeon_Walkable` (room floors and
+corridors only) are navmesh-friendly meshes. Naming follows Godot's
+scene importer (`-col`, `-colonly`, `-navmesh`) or Unity (`_col` under
+a `Collision` group, `_LOD0/_LOD1` for automatic LODGroups). All of it
+is temporary scene surgery around one `export_scene.gltf` call and is
+restored afterwards - the smoke test checks that the scene is unchanged
+and that the re-imported GLB has 3 roots, 1,022 colliders, 755 LOD pairs
+and 2 walkable meshes for the Dorf.
+
+**Dungeon.** `DungeonParams.levels` (2 by default, up to 4) stacks BSP
+levels 3.5 m apart; `plan_stairs` finds the pair of rooms (one per
+level) whose plan-view overlap fits a 4.2 x 1.8 m flight with clearance
+and centres it there; the upper room's floor and the lower room's
+ceiling get a hole with a shaft between, the flight is 14 steps with a
+parapet around the hole; pillars, the dais and the props keep off it.
+Every doorway now has a lintel (the gap used to run to the ceiling) and
+a door standing ajar (an iron gate in the crypt, oak in the castle, none
+in the cave). Three themes change the stone, door and prop materials
+and the room props: sarcophagi in rows (crypt), boulders (cave), wall
+banners (castle). Lighting: torches on the long walls every 7 m in
+addition to the doorway torches, and one dim, soft fill light per room
+in the theme's tint. The start room is the smallest on the top level,
+the boss hall the largest on the lowest. `validate_dungeon` checks room
+overlaps, per-level connectivity, doorways, that the stairs lie inside
+both rooms and clear of the pillars - 0 problems over 50 seeds x 3
+themes, deterministic per seed.
+
+**World.** The terrain shader has biomes: the meadow band just outside
+the city is drier and lighter, the forest ring's floor is dark humus
+with leaf litter, slopes are rock as before, and the highest peaks (the
+top 1% of the heightmap, set per terrain from its own distribution)
+are snow (on terrains with at least 40 m of relief - the default 22 m city
+terrain stays snow-free). A country road leaves the city from its eastern edge node,
+runs straight for 24 m and then bends piece by piece to 15 m from the
+map edge - no sidewalks, an asphalt skirt into the sunk road bed, a
+100 km/h sign, no lamps or parked cars - and a village of 2-6 cottages
+stands along it between 1.3 and 1.8 x the city radius, alternating
+sides, set back so even a diagonal road keeps the sidewalk-plus-margin
+clearance. Road and village are ordinary street segments and building
+plans, so the terrain pads, the forest ring's clearance and Validate
+Map cover them: 0 issues over the fuzz set, one street component.
+
+**Metropole, seed 12 - the same bridge as v0.13: post railings on a low parapet, deck fascia, arched soffit:**
+![River and bridge](docs/progression/v0.14.0-bridge.png)
+
+**Castle dungeon, seed 7 - from the lower level looking up the staircase through the floor of the level above:**
+![Dungeon stairs](docs/progression/v0.14.0-dungeon-stairs.png)
+
+**Kleinstadt, seed 4 - the country road leaving the city's east edge past the village into the forest ring:**
+![Country road and village](docs/progression/v0.14.0-country-road.png)
+
+**The exported GLB's hierarchy (Godot naming):**
+![Export hierarchy](docs/progression/v0.14.0-export-hierarchy.png)
+
+---
+
+## v0.13.0 — Night windows that read as homes, balconies and shops, parks, a river with bridges
 
 The visuals release. Every change here is in the planning half first and
 pinned by pure-Python tests (`tests/test_city_visuals.py`), the meshes

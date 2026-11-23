@@ -6,7 +6,7 @@ contract used by procgen_maps/generators/__init__.py.
 """
 from dataclasses import dataclass
 
-from . import buildings, layout, parking, parks, props, signage, special_buildings, streets, water, zones  # noqa: F401
+from . import buildings, countryside, layout, parking, parks, props, signage, special_buildings, streets, water, zones  # noqa: F401
 
 CITY_ROOT_COLLECTION_NAME = "ProcgenMaps_City"
 
@@ -34,6 +34,7 @@ class CityPlan:
     sign_placements: list
     parking_lot_specs: list
     park_specs: list = None
+    village_plans: list = None
 
     @property
     def river(self):
@@ -49,7 +50,16 @@ def plan_city(preset, terrain_params=None, seed=None) -> CityPlan:
     special/regular buildings -> parking -> props -> signage) and return
     the plain-data result. No bpy anywhere in here, so this is what the
     pytest suite runs over many seeds."""
+    import random
+
     city_layout = layout.generate_layout(preset, seed=seed)
+    # The country road to the map edge and the village along it (v0.14):
+    # ordinary street segments / building plans, so every later stage and
+    # the validator treat them like the rest of the city.
+    world_half = terrain_params.world_size / 2.0 if terrain_params is not None else preset.radius * 2.1
+    country_rng = random.Random(f"procgen_maps:country:{preset.seed if seed is None else seed}")
+    city_layout.streets.extend(countryside.plan_country_road(city_layout, preset, country_rng, world_half))
+    village_plans = countryside.plan_village(city_layout, preset, country_rng)
     zone_by_block = zones.classify_zones(city_layout.blocks, preset, seed=seed)
     street_graph = streets.build_street_graph(city_layout.streets)
 
@@ -58,6 +68,7 @@ def plan_city(preset, terrain_params=None, seed=None) -> CityPlan:
     regular_blocks = [b for b in city_layout.blocks if b.id not in reserved_block_ids]
     building_plans = buildings.plan_buildings(regular_blocks, zone_by_block, preset, seed=seed,
                                               street_graph=street_graph)
+    building_plans.extend(village_plans)
     from .setback import roads_from_graph
     parking_lot_specs = parking.plan_parking_lots_for_supermarkets(
         city_layout.blocks, special_plans, roads=roads_from_graph(street_graph, preset))
@@ -82,7 +93,7 @@ def plan_city(preset, terrain_params=None, seed=None) -> CityPlan:
         sign_placements = [p for p in sign_placements
                            if not river.contains(p.location[0], p.location[1], river.bank_margin)]
     return CityPlan(city_layout, zone_by_block, street_graph, building_plans, special_plans,
-                    prop_placements, sign_placements, parking_lot_specs, park_specs)
+                    prop_placements, sign_placements, parking_lot_specs, park_specs, village_plans)
 
 
 def generate_city(preset, terrain_params=None, seed=None, parent_collection=None, progress=None):

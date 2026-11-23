@@ -56,8 +56,8 @@ from .streets import StreetGraph
 
 SIGNAGE_PREFIX = "ProcgenMaps_Signage"
 
-SPEED_LIMIT_KMH = {"arterial": 50, "local": 30}
-_SPEED_SIGN_INTERVAL = {"arterial": 140.0, "local": 200.0}
+SPEED_LIMIT_KMH = {"arterial": 50, "local": 30, "country": 100}
+_SPEED_SIGN_INTERVAL = {"arterial": 140.0, "local": 200.0, "country": 400.0}
 _SPEED_SIGN_MIN_EDGE_LENGTH = 15.0
 
 _STREET_NAME_WORDS = ("Oak", "Maple", "Elm", "Birch", "Cedar", "Willow", "Pine", "Ash",
