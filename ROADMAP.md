@@ -5,7 +5,7 @@ theme; every version ships with a green `pytest` + headless Blender smoke
 test, a regression test for every bug it fixes, and a `PROGRESSION.md`
 entry with renders. Order and scope may shift, but the themes are fixed.
 
-## v0.11 - Correctness and robustness (this release)
+## v0.11 - Correctness and robustness (shipped)
 
 - Project-wide placement audit: overlaps between every object class
   (buildings, roads, sidewalks, props, signs, parking lots, special
@@ -21,14 +21,20 @@ entry with renders. Order and scope may shift, but the themes are fixed.
   asphalt, disconnected streets, floating/buried objects and orphan
   datablocks for the current scene.
 
-## v0.12 - Performance and scale
+## v0.12 - Performance and scale (this release)
 
-- Profile every preset; target: Metropole (terrain + city) under 4 s.
-- Fewer objects: merge buildings/streets per block or chunk, props via
-  instancing or Geometry Nodes.
-- Material de-duplication, fewer depsgraph updates, a progress indicator
-  in the panel.
-- Large-map mode (chunked generation), runtime-budget tests, memory
+- [x] Terrain under roads: the ground can no longer poke through the
+  asphalt or sidewalks (road bed sunk into the terrain mesh, checked by
+  `terrain_above_roads` in Validate Map and the smoke test).
+- [x] Sidewalk corner pieces at every crossing, T-junction and bend.
+- [x] Fewer objects: the whole street network is one mesh object (road
+  width/lanes as per-face attributes).
+- [x] Profile every preset (OPTIMIZATION.md); progress cursor while
+  Generate City runs.
+- [ ] Metropole (terrain + city) under 4 s - at ~5 s; needs a
+  per-block building builder (buildings are ~80% of the time).
+- [ ] Buildings merged per block, props via Geometry Nodes instancing.
+- [ ] Large-map mode (chunked generation), runtime-budget tests, memory
   measurements.
 
 ## v0.13 - City visuals

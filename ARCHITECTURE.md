@@ -120,7 +120,8 @@ CityPreset
                                     pull footprints back from the roads via setback.py)
   -> props.plan_props              (PropPlacement[]; + forest ring outside layout.radius)
   -> signage.plan_signage          (SignPlacement[])
-  -> streets.build_street_meshes   -> road objects (asphalt + sidewalk/curb, 2 UV maps)
+  -> streets.build_street_meshes   -> ONE street-network object (asphalt + sidewalk/curb
+                                      + fans + corner pieces, 2 UV maps, per-face attrs)
   -> buildings.build_building_meshes -> building mesh objects (3 material slots)
   -> props.build_props             -> prop Empty objects
 ```
@@ -136,7 +137,10 @@ sidewalk's width of clearance between every footprint and the road edge.
 
 If `terrain_params` is passed in, `build_street_meshes` and
 `build_building_meshes` call `terrain.sample_world_height` per point/
-footprint so streets and buildings sit on the terrain surface.
+footprint so streets and buildings sit on the terrain surface, and the
+terrain mesh itself is reshaped to agree with them: flattened under
+every building footprint and sunk 0.5 m under every street corridor
+(`terrain.flatten_terrain_for_footprints`, `lower_terrain_under_corridors`).
 
 **Materials** are all shared, parametrized node setups created once by a
 `get_or_create_*` function and keyed off per-object custom properties or
@@ -157,7 +161,8 @@ sign/building, sign/road, parking/road, parking/building), disconnected
 street components and degenerate edges - pure Python, run by
 `tests/test_validation.py` over many seeds and every preset.
 `validate_scene` adds the bpy-only checks (object z against
-`sample_world_height`, orphan datablocks). `ui/operators.py`'s
+`sample_world_height`, terrain vertices above a street surface via
+`terrain_above_roads`' BVH ray casts, orphan datablocks). `ui/operators.py`'s
 `PROCGEN_OT_validate_map` runs both and writes the summary to
 `settings.validation_summary`.
 
@@ -196,11 +201,12 @@ Object name prefixes:
   (`generators/terrain.py`'s `TERRAIN_OBJECT_NAME`).
 - `ProcgenMaps_Building_<index>` - one per generated building
   (`buildings.py`'s `BUILDINGS_PREFIX`).
-- `ProcgenMaps_Street_Seg<index>` / `ProcgenMaps_Street_Node<index>` - one
-  road object per street-graph edge (asphalt strip in material slot 0,
-  both sidewalks + curbs in slot 1), one intersection fan per 3+-degree
-  node, sized by that node's widest street (`streets.py`'s
-  `STREETS_PREFIX`).
+- `ProcgenMaps_Street_Network` - the whole street network as one mesh
+  object (`streets.py`'s `STREET_NETWORK_OBJECT_NAME`): per edge an
+  asphalt strip (material slot 0) plus both sidewalks + curbs (slot 1),
+  per node an asphalt fan sized by that node's widest street and the
+  sidewalk corner pieces (`corner_sidewalk_paths`). Before v0.12.0 this
+  was one object per edge and per 3+-degree node.
 - `<asset_id>_inst` - one Empty per placed prop, e.g. `tree_03_inst`,
   `street_lamp_inst`, `parked_car_inst` (`assets/factory.py`'s `spawn`).
 - `ProcgenMaps_AssetSrc_<asset_id>_<detail>` /
@@ -224,8 +230,8 @@ read back with `obj.get("key")`):
 | `procgen_maps_block_id` | building objects | originating `Block.id`, for traceability back to the layout |
 | `procgen_maps_base_z`, `procgen_maps_floor_height` | building objects | ground height and floor pitch, read by the facade shader's grime band and floor-slab lines |
 | `procgen_maps_roof_index` | building objects | 0 = flat gravel roof, 1-3 = tile colors for gabled roofs (`city_mat.py`'s roof ramp) |
-| `procgen_maps_street_class` | street segment objects | `"arterial"` or `"local"`, used for width and prop offset |
-| `procgen_maps_road_width`, `procgen_maps_road_lanes` | street segment objects | meters / 1 (local) or 2 (arterial); drive the asphalt shader's marking layout |
+| `procgen_maps_street_class` | the street-network object | `"network"` (marks it for validation's ground-contact check); `procgen_maps_street_edges` / `_nodes` carry the graph size |
+| `procgen_maps_road_width`, `procgen_maps_road_lanes` | per-face float *mesh attributes* on the street-network object | meters / 1 (local) or 2 (arterial), 0 on sidewalks and fans; drive the asphalt shader's marking layout (Attribute node, GEOMETRY mode) |
 | `procgen_maps_asset_id` | prop Empties | which `assets/library.py` entry this instance is, e.g. `"street_lamp"` - also used to find lamps for Night Mode's point lights |
 | `procgen_maps_lod_detail` | prop Empties | current LOD tier (`"high"`/`"medium"`/`"low"`), compared against in `update_lod` to skip no-op re-assignments |
 

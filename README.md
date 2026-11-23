@@ -21,8 +21,10 @@ and exports them to common interchange formats. Targets Blender 4.2+
   street network with real intersections) -> zone classification -> street
   network -> building setbacks -> buildings -> props, each stage a separate,
   independently testable module.
-- **Streets with sidewalks and markings**: every road is an asphalt strip
-  plus a raised curb/sidewalk on both sides; a single shared procedural
+- **Streets with sidewalks and markings**: the whole network is one mesh
+  object - every road is an asphalt strip plus a raised curb/sidewalk on
+  both sides, with corner pieces at every crossing and bend, and the
+  terrain is sunk beneath every street so no ground shows through; a single shared procedural
   shader paints dashed or double center lines, lane dividers, edge lines,
   zebra crossings at intersections, paint wear and paving joints from
   meter-scaled UVs - no texture files. Parked cars sit in the kerbside
@@ -72,6 +74,7 @@ and exports them to common interchange formats. Targets Blender 4.2+
   dice button next to the seed field.
 - **Validate Map**: one click checks the generated map for overlaps
   (buildings, roads, props, signs, parking lots), disconnected streets,
+  terrain poking through a street surface,
   floating or buried objects and orphan datablocks, and shows the summary
   in the panel (full report in the system console). The same validator
   runs in the test suite over 50 seeds x 4 presets

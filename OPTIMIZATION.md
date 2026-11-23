@@ -1,5 +1,54 @@
 # Optimization
 
+## v0.12.0 profile (headless Blender 5.2, idle priority, 8 threads, seed 42)
+
+Same method as the v0.10.0 table below (`generate_terrain` +
+`generate_city` + `generate_dungeon`, no profiler attached, second run);
+"before" is the v0.11.0 commit measured the same night on the same
+machine. Object counts are everything in `bpy.data.objects` after the
+three generates (props are Empties instancing shared collections).
+
+| Preset | v0.11.0 total | v0.12.0 total | city only | objects before -> after | verts after |
+|---|---|---|---|---|---|
+| Metropole | 5.14 s | **4.98 s** | 4.26 -> 4.22 s | 7,369 -> **6,655** | 1.09 M |
+| Kleinstadt | 1.68 s | **1.65 s** | 1.29 -> 1.29 s | 5,703 -> **5,063** | 331 k |
+| Dorf | 0.78 s | 0.80 s | 0.48 -> 0.55 s | 2,524 -> **2,249** | 288 k |
+| Industrial | 1.14 s | 0.94 s | 0.78 -> 0.65 s | 2,348 -> **2,148** | 345 k |
+
+(The v0.11.0 Metropole row was measured while a render ran at idle
+priority on the same machine, so treat +-10% as noise.)
+
+What changed and what it bought:
+
+- **One street-network object** instead of one per edge and per
+  intersection: -714 objects (Metropole), -640 (Kleinstadt). Road width
+  and lane count became per-face float attributes so the asphalt shader
+  (Attribute node, GEOMETRY mode) needs no per-object properties. Mesh
+  building itself was never the cost (~0.2 s), the win is in the
+  outliner, selection, depsgraph and export object counts.
+- **Terrain under roads** (`lower_terrain_under_corridors`): one
+  numpy pass over the corridor windows, ~0.05 s for a Metropole; the
+  6 m road chunks add ~10k road vertices, invisible in the timings.
+- **Progress cursor**: `generate_city(progress=...)` reports between
+  stages; the operator feeds it to `wm.progress_update` (a no-op
+  headless).
+- **Materials** were checked for duplication: every material in the
+  scene already comes from a `get_or_create_*` singleton (facade,
+  window, roof, road, sidewalk, terrain, prop, signage, special-building
+  signs), the fingerprint shows no `.001` copies after a regenerate, so
+  there was nothing to dedupe.
+
+**What is still left, and why the Metropole is not under 4 s:** the
+`generate_city` time is ~80% `_build_single_building` (bmesh
+extrude/translate/sort per floor, one `inset_individual` per floor and
+thickness for the windows) - ~3.4 s of 4.2 s. Streets, props, signage
+and the terrain passes together are under 0.7 s. A per-block building
+builder that assembles all floors of a block in one numpy-generated
+mesh (and reads facade/tint/roof from per-face attributes the way the
+roads now do) is the next step; memory per Metropole scene is dominated
+by the 1 M-vertex terrain (1024 x 1024 grid) rather than the city.
+
+
 ## v0.10.0 generation profile (headless Blender 5.2, idle priority, 8 threads)
 
 Measured with `cProfile` around `generate_terrain` + `generate_city` +

@@ -6,7 +6,64 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.11.0 — Correctness audit: nothing on the asphalt, nothing left behind (current)
+## v0.12.0 — Terrain stays under the roads, closed sidewalk corners, one street object (current)
+
+**The bug first.** Every v0.11.0 render had green terrain blotches
+poking through the asphalt at crossings and along the roads (look at the
+left half of the v0.11.0 intersection image). Cause: streets sample the
+*continuous* heightfield at their own vertices, while the terrain mesh
+interpolates linearly between grid vertices ~2 m apart - wherever the
+ground curves, the mesh sits up to 0.8 m (Kleinstadt) / 1.1 m (Metropole)
+above the planar road chunk between two samples. Measured with a new
+check (`validation.terrain_above_roads`: one BVH of all street geometry,
+a ray straight down from above every terrain vertex, a hit *below* the
+vertex is a poke-through): **3,509 terrain vertices above the road in
+Kleinstadt seed 4, 9,165 in Metropole seed 12, 560 in Dorf seed 7.**
+
+The fix is in the terrain, not in lifting the roads: after the building
+pads are flattened in, the terrain mesh is sunk 0.5 m below the
+heightfield under every street footprint (asphalt plus both sidewalks,
+plus a disc around every node that reaches the outer corner of the
+crossing), blended back to the raw ground over 2.5 m
+(`terrain.lower_terrain_under_corridors`). The road bed wins over a
+neighbouring building pad's blend, which used to lift the ground back up
+under the sidewalk. Road strips are chopped into 6 m instead of 12 m
+chunks so they follow the ground more closely. **After: 0 vertices above
+the road in Kleinstadt 4 / Dorf 7 / Industrial 3 / Metropole 42, 5 of
+171k in Metropole 12 (worst 2.4 cm, inside the curb).** The check runs
+in Validate Map and the smoke test.
+
+**Sidewalk corners.** Every strip's sidewalk stopped a fan radius plus a
+sidewalk width short of the node and nothing was built in between: each
+90-degree corner lost a 2 x 2 m square of pavement (grass between the
+two curbs), the top of every T-junction lost a 2 x trim long stretch, and
+the outside of a bend had no pavement at all. `corner_sidewalk_paths`
+(pure Python, unit-tested) now builds the missing pieces per node:
+strip end -> asphalt corner -> strip end for a convex wedge, straight
+across for a 180-degree wedge, an arc hugging the asphalt fan around the
+outside of a bend. Bends get an asphalt fan too.
+
+**One street object.** The whole network - every strip, every fan, every
+corner piece - is now one mesh object (`ProcgenMaps_Street_Network`)
+instead of one object per edge and per intersection (714 fewer objects
+in a Metropole, 640 fewer in a Kleinstadt). The asphalt shader's road
+width and lane count moved from object custom properties to per-face
+float attributes (`procgen_maps_road_width` / `procgen_maps_road_lanes`,
+read by the Attribute node in GEOMETRY mode), so markings are unchanged.
+Generate City drives the window manager's progress cursor between
+stages. Timings and counts for all four presets are in OPTIMIZATION.md;
+the Metropole stays at ~5 s - the sub-4 s target needs the per-block
+building builder, which did not fit this round.
+
+**Before/after - Kleinstadt, seed 4, the same crossing as the v0.11.0 image (v0.11.0 left, v0.12.0 right): no more ground through the asphalt, and the sidewalk runs around every corner:**
+![Road terrain before and after](docs/progression/v0.12.0-road-terrain-before-after.png)
+
+**Metropole, seed 12, low angle - roads on undulating ground, no terrain through them:**
+![Metropole low angle](docs/progression/v0.12.0-metropole-low.png)
+
+---
+
+## v0.11.0 — Correctness audit: nothing on the asphalt, nothing left behind
 
 A robustness release, not a visual one: the goal was a generator whose
 output is provably clean for any preset and seed, and the tooling to keep
