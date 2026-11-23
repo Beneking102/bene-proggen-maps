@@ -6,7 +6,13 @@ import pytest
 
 from procgen_maps.assets.library import ASSET_DEFS
 from procgen_maps.config.presets import PRESETS
-from procgen_maps.generators.city.buildings import BuildingPlan, FacadeType, plan_buildings
+from procgen_maps.generators.city.buildings import (
+    BuildingPlan,
+    FacadeType,
+    detail_rng,
+    plan_buildings,
+    window_mask,
+)
 from procgen_maps.generators.city.layout import Block, generate_layout
 from procgen_maps.generators.city.parking import (
     ParkingLotSpec,
@@ -15,6 +21,13 @@ from procgen_maps.generators.city.parking import (
     plan_parking_stalls,
 )
 from procgen_maps.generators.city.props import plan_props
+from procgen_maps.generators.city.setback import (
+    rect_segment_distance,
+    road_clearance,
+    roads_from_graph,
+    roads_near,
+    shrink_footprint_for_setback,
+)
 from procgen_maps.generators.city import signage
 from procgen_maps.generators.city.signage import plan_signage
 from procgen_maps.generators.city.special_buildings import (
@@ -630,3 +643,72 @@ def test_plan_parking_lines_has_one_more_line_than_stalls_per_row():
     lines = plan_parking_lines(spec)
 
     assert len(lines) == len(stalls) + 1
+
+
+def test_rect_segment_distance_zero_when_touching_or_crossing():
+    rect = (-5.0, -5.0, 5.0, 5.0)
+    assert rect_segment_distance(rect, (-20.0, 0.0, 20.0, 0.0)) == 0.0      # crosses through
+    assert rect_segment_distance(rect, (-20.0, 5.0, 20.0, 5.0)) == 0.0      # runs along the top edge
+    assert rect_segment_distance(rect, (0.0, 0.0, 1.0, 1.0)) == 0.0         # fully inside
+
+
+def test_rect_segment_distance_matches_hand_computed_cases():
+    rect = (-5.0, -5.0, 5.0, 5.0)
+    assert rect_segment_distance(rect, (-20.0, 8.0, 20.0, 8.0)) == pytest.approx(3.0)   # parallel, 3 m above
+    assert rect_segment_distance(rect, (8.0, 9.0, 20.0, 9.0)) == pytest.approx(5.0)     # endpoint nearest corner
+    assert rect_segment_distance(rect, (9.0, -20.0, 9.0, 20.0)) == pytest.approx(4.0)   # vertical, right of rect
+
+
+def test_road_clearance_is_negative_when_road_surface_overlaps_footprint():
+    rect = (-5.0, -5.0, 5.0, 5.0)
+    assert road_clearance(rect, [(-20.0, 7.0, 20.0, 7.0, 6.0)]) == pytest.approx(-1.0)
+    assert road_clearance(rect, [(-20.0, 10.0, 20.0, 10.0, 6.0)]) == pytest.approx(2.0)
+    assert road_clearance(rect, []) == math.inf
+
+
+def test_shrink_footprint_for_setback_reaches_required_clearance():
+    # Block edge exactly on a 6 m-wide street's centerline (the raster
+    # layout's worst case): the footprint must pull back by 3 m of road
+    # plus the required 2.6 m setback on that side.
+    roads = [(-50.0, 10.0, 50.0, 10.0, 6.0)]
+    hw, hh = shrink_footprint_for_setback((0.0, 0.0), (10.0, 10.0), roads, required=2.6)
+    assert hh == pytest.approx(10.0 - 3.0 - 2.6)
+    assert hw == hh  # shrinks uniformly on both axes
+    assert road_clearance((-hw, -hh, hw, hh), roads) >= 2.6 - 1e-9
+
+
+def test_shrink_footprint_for_setback_leaves_clear_footprints_alone():
+    roads = [(-50.0, 30.0, 50.0, 30.0, 6.0)]
+    assert shrink_footprint_for_setback((0.0, 0.0), (10.0, 8.0), roads) == (10.0, 8.0)
+
+
+def test_shrink_footprint_for_setback_never_goes_below_minimum():
+    roads = [(-50.0, 0.0, 50.0, 0.0, 6.0)]  # street through the block center: unfixable
+    hw, hh = shrink_footprint_for_setback((0.0, 0.0), (10.0, 10.0), roads, min_half_size=3.0)
+    assert (hw, hh) == (3.0, 3.0)
+
+
+def test_roads_near_keeps_only_roads_within_reach():
+    roads = [(0.0, 20.0, 100.0, 20.0, 6.0), (0.0, 500.0, 100.0, 500.0, 6.0)]
+    assert roads_near((50.0, 0.0), (10.0, 10.0), roads, reach=30.0) == roads[:1]
+
+
+def test_detail_rng_is_stable_across_processes_and_purposes():
+    # Regression: the per-building detail streams used to be seeded from
+    # hash((block_id, "detail")), and str hashing is randomized per Python
+    # process, so rooftop units / furniture / windows differed between two
+    # Blender launches with the identical seed. A string seed goes through
+    # random.Random's own stable seeding - pin the first draw so any future
+    # change to the seeding scheme is a deliberate, visible one.
+    assert detail_rng(7, "detail").random() == pytest.approx(0.02104189084314123)
+    assert detail_rng(7, "detail").random() == detail_rng(7, "detail").random()
+    assert detail_rng(7, "detail").random() != detail_rng(7, "furniture").random()
+    assert detail_rng(7, "detail").random() != detail_rng(8, "detail").random()
+
+
+def test_window_mask_is_deterministic_and_respects_frequency_extremes():
+    assert window_mask(detail_rng(3, "windows"), 12, 0.5) == window_mask(detail_rng(3, "windows"), 12, 0.5)
+    assert window_mask(detail_rng(3, "windows"), 12, 0.5) != window_mask(detail_rng(4, "windows"), 12, 0.5)
+    assert window_mask(detail_rng(3, "windows"), 20, 1.0) == [True] * 20
+    assert window_mask(detail_rng(3, "windows"), 20, 0.0) == [False] * 20
+    assert len(window_mask(detail_rng(3, "windows"), 0, 0.5)) == 0

@@ -16,4 +16,14 @@ def export_usdz(filepath: str) -> None:
     if not filepath.endswith(".usdz"):
         raise ValueError("filepath must end with .usdz")
 
-    bpy.ops.wm.usd_export(filepath=filepath, export_textures=True, selected_objects_only=False)
+    # Blender 5.0 renamed the exporter's texture option (`export_textures`
+    # became `export_textures_mode`, an enum) - passing an unknown keyword
+    # raises TypeError before the operator even runs. Only pass what this
+    # Blender's operator actually declares.
+    kwargs = {"filepath": filepath, "selected_objects_only": False}
+    declared = bpy.ops.wm.usd_export.get_rna_type().properties.keys()
+    if "export_textures" in declared:
+        kwargs["export_textures"] = True
+    elif "export_textures_mode" in declared:
+        kwargs["export_textures_mode"] = 'NEW'
+    bpy.ops.wm.usd_export(**kwargs)

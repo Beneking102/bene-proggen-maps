@@ -88,6 +88,13 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="procgen_maps_smoke_") as tmp_dir:
         settings.export_directory = tmp_dir
+        # The render operators are exercised for "does the Cycles CPU path
+        # run end to end and write a PNG", not for image quality - a tiny
+        # frame with a handful of samples keeps the whole smoke test under
+        # a minute on a CI runner (a 4K/128-sample frame would take ages).
+        settings.showcase_width = 320
+        settings.showcase_height = 180
+        settings.showcase_samples = 4
 
         def export_and_check(op_name, filename):
             filepath = os.path.join(tmp_dir, filename)

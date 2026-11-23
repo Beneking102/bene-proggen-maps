@@ -395,7 +395,8 @@ class PROCGEN_OT_render_showcase(bpy.types.Operator):
         context.scene.camera = bpy.data.objects.get(showcase.CAMERA_NAME)
 
         filepath = _resolve_export_path(context, "procgen_maps_showcase.png")
-        showcase.render_showcase(filepath, resolution=(settings.showcase_width, settings.showcase_height))
+        showcase.render_showcase(filepath, resolution=(settings.showcase_width, settings.showcase_height),
+                                 samples=settings.showcase_samples)
 
         self.report({'INFO'}, f"Showcase render saved to {filepath}")
         return {'FINISHED'}
@@ -432,7 +433,13 @@ class PROCGEN_OT_render_interior(bpy.types.Operator):
         context.scene.camera = bpy.data.objects.get(showcase.CAMERA_NAME)
 
         filepath = _resolve_export_path(context, "procgen_maps_interior.png")
-        showcase.render_interior_view(filepath)
+        # A close-up of one building doesn't need the 4K showcase size - cap
+        # at 1080p, but honor smaller settings (quick previews, the headless
+        # smoke test) and the shared sample count.
+        showcase.render_interior_view(
+            filepath,
+            resolution=(min(settings.showcase_width, 1920), min(settings.showcase_height, 1080)),
+            samples=settings.showcase_samples)
 
         self.report({'INFO'}, f"Interior view of {target.name} saved to {filepath} (this took a while - Cycles)")
         return {'FINISHED'}

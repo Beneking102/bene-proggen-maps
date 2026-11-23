@@ -70,6 +70,7 @@ class PROCGEN_PT_showcase_panel(bpy.types.Panel):
         row = layout.row(align=True)
         row.prop(settings, "showcase_width")
         row.prop(settings, "showcase_height")
+        layout.prop(settings, "showcase_samples")
         layout.operator("procgen_maps.render_showcase")
         layout.separator()
         layout.operator("procgen_maps.render_interior")

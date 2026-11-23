@@ -111,6 +111,28 @@ def plan_buildings(blocks: List[Block], zone_by_block: Dict[int, str], preset, s
     return plans
 
 
+def detail_rng(block_id: int, purpose: str) -> random.Random:
+    """A per-building, per-purpose random stream that is stable across
+    processes. The previous `hash((block_id, "detail"))` looked
+    deterministic but isn't: Python randomizes str hashing per interpreter
+    process (PYTHONHASHSEED), so a tuple containing a string hashes
+    differently on every Blender launch - the same seed produced different
+    rooftop units and furniture rotations on every run. Seeding
+    random.Random with a *string* instead uses its own stable SHA-512
+    based seeding, which is reproducible everywhere."""
+    return random.Random(f"procgen_maps:{block_id}:{purpose}")
+
+
+def window_mask(rng: random.Random, columns: int, frequency: float) -> List[bool]:
+    """Which of `columns` window bays on one floor face get a recessed
+    window (True) - one draw per column in column order so a facade's
+    pattern is a pure function of its own rng stream. Pulled out of the
+    bmesh code so it is unit-testable, and seeded per building rather than
+    drawn from the global `random` module as before (which made window
+    layouts differ from run to run for the same seed)."""
+    return [rng.random() <= frequency for _ in range(columns)]
+
+
 def build_building_meshes(plans: List[BuildingPlan], terrain_params=None, collection=None):
     """Extrude each BuildingPlan's footprint into a mesh object, plus an
     optional rooftop unit and a furnished ground-floor interior.
@@ -144,7 +166,7 @@ def build_building_meshes(plans: List[BuildingPlan], terrain_params=None, collec
             collection.objects.link(obj)
         building_objects.append(obj)
 
-        rng = random.Random(hash((plan.block_id, "detail")) & 0xFFFFFFFF)
+        rng = detail_rng(plan.block_id, "detail")
         if plan.facade.roof_style == "flat" and plan.floors >= 2 and rng.random() < _ROOFTOP_UNIT_CHANCE:
             roof_z = base_z + plan.floors * plan.floor_height
             unit = factory.spawn("rooftop_unit", (cx + rng.uniform(-1.0, 1.0), cy + rng.uniform(-1.0, 1.0), roof_z),
@@ -165,6 +187,7 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
     base_face = bm.faces.new(base_verts)
     bm.faces.ensure_lookup_table()
 
+    window_rng = detail_rng(plan.block_id, "windows")
     top_face = base_face
     for floor_index in range(plan.floors):
         # extrude_face_region's own "geom" return only ever reports the
@@ -177,7 +200,11 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
         new_verts = [g for g in extruded["geom"] if isinstance(g, bmesh.types.BMVert)]
         bmesh.ops.translate(bm, verts=new_verts, vec=(0.0, 0.0, plan.floor_height))
         bm.faces.ensure_lookup_table()
-        new_faces = list(set(bm.faces) - faces_before)
+        # A bare set difference iterates in memory-address order, which
+        # differs from run to run - and since the window rng is drawn in
+        # face order, the same seed produced different window layouts on
+        # every launch. Sort geometrically so the order is reproducible.
+        new_faces = sorted(set(bm.faces) - faces_before, key=_face_sort_key)
 
         # Picking by largest area (not just "first match") matters here:
         # `new_faces` comes from an unordered set diff, and a small window
@@ -194,13 +221,13 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
                 if face is entrance_face:
                     _add_entrance(bm, face)
                 elif plan.facade.window_frequency > 0:
-                    _add_window_row(bm, face, plan.facade)
+                    _add_window_row(bm, face, plan.facade, window_rng)
             continue
 
         if plan.facade.window_frequency > 0:
             side_faces = [f for f in new_faces if abs(f.normal.z) < 0.1]
             for face in side_faces:
-                _add_window_row(bm, face, plan.facade)
+                _add_window_row(bm, face, plan.facade, window_rng)
 
     if plan.facade.roof_style != "flat":
         bm.faces.ensure_lookup_table()
@@ -223,6 +250,11 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
     return bpy.data.objects.new(name, mesh)
 
 
+def _face_sort_key(face):
+    center = face.calc_center_median()
+    return (round(center.x, 4), round(center.y, 4), round(center.z, 4))
+
+
 def _horizontal_edges(face):
     """The pair of a floor side-face's edges that run along the building
     perimeter (both endpoints at the same Z) - subdividing these adds
@@ -243,10 +275,11 @@ def _add_entrance(bm, face):
     face.material_index = 1
 
 
-def _add_window_row(bm, face, facade: "FacadeType"):
+def _add_window_row(bm, face, facade: "FacadeType", rng: random.Random):
     """Split one floor's side face into window-pitch-wide columns and punch
-    a recessed window into a random subset of them (frequency-controlled),
-    instead of insetting the whole face as one big panel."""
+    a recessed window into a random subset of them (frequency-controlled,
+    drawn from the building's own `rng` - see window_mask), instead of
+    insetting the whole face as one big panel."""
     import bmesh
 
     horizontal = _horizontal_edges(face)
@@ -264,8 +297,8 @@ def _add_window_row(bm, face, facade: "FacadeType"):
     else:
         column_faces = [face]
 
-    for column_face in column_faces:
-        if random.random() > facade.window_frequency:
+    for column_face, has_window in zip(column_faces, window_mask(rng, len(column_faces), facade.window_frequency)):
+        if not has_window:
             continue
         thickness = min(0.35, column_face.calc_area() ** 0.5 * 0.25)
         # inset_individual keeps `column_face` itself as the recessed inner
@@ -361,7 +394,7 @@ def _build_ground_floor_interior(plan: BuildingPlan, base_z: float, index: int, 
         for obj in created:
             collection.objects.link(obj)
 
-    rng = random.Random(hash((plan.block_id, "furniture")) & 0xFFFFFFFF)
+    rng = detail_rng(plan.block_id, "furniture")
     furniture_ids = library.FURNITURE_BY_FACADE.get(plan.facade.key, [])
     for slot_index, asset_id in enumerate(furniture_ids):
         slot_x, slot_y = _INTERIOR_FURNITURE_SLOTS[slot_index % len(_INTERIOR_FURNITURE_SLOTS)]

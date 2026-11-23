@@ -74,6 +74,10 @@ class ProcgenMapsSettings(bpy.types.PropertyGroup):
     )
     showcase_width: bpy.props.IntProperty(name="Width", default=3840, min=64, max=8192)
     showcase_height: bpy.props.IntProperty(name="Height", default=2160, min=64, max=8192)
+    showcase_samples: bpy.props.IntProperty(
+        name="Samples", default=128, min=1, max=4096,
+        description="Cycles samples per pixel for the showcase/interior renders (denoised, so 64-256 "
+                    "is plenty; lower it for quick previews)")
 
     stat_objects: bpy.props.IntProperty(name="Objects", default=0)
     stat_vertices: bpy.props.IntProperty(name="Vertices", default=0)

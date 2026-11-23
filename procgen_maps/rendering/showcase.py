@@ -171,37 +171,49 @@ def ensure_showcase_sun(night_mode: bool, energy_day=2.0, energy_night=0.08,
     return sun_obj
 
 
-def configure_render_settings(resolution=(3840, 2160), samples=256):
+DEFAULT_SHOWCASE_SAMPLES = 128
+
+
+def configure_render_settings(resolution=(3840, 2160), samples=DEFAULT_SHOWCASE_SAMPLES):
+    """Cycles on the CPU, with adaptive sampling and OpenImageDenoise.
+
+    This used to be EEVEE Next. EEVEE is a rasterizer that needs a live GPU/
+    OpenGL context even for `blender --background` renders, and on a
+    headless machine without a display or GPU driver (every CI runner, and
+    the CI job that ran this project's smoke test) Blender aborts with
+    SIGABRT (exit code 134) the moment the render starts - that was the
+    standing blender-smoke failure. Cycles' CPU device needs nothing but
+    CPU cores, so the showcase render now works identically in the
+    interactive editor, in headless batch scripts and on CI, and it is
+    also what the interior view already needed (real ray-traced
+    transmission through the window glass, see render_interior_view).
+    `use_denoising` keeps the sample count - and so the wall-clock time -
+    moderate; `device = 'CPU'` is set explicitly so a user whose
+    preferences enable a GPU compute device still gets the same
+    deterministic, driver-independent path for this one-off render."""
     import bpy
 
     scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    cycles = scene.cycles
+    cycles.device = 'CPU'
+    cycles.samples = max(1, int(samples))
+    cycles.use_adaptive_sampling = True
+    cycles.use_denoising = True
     try:
-        scene.render.engine = 'BLENDER_EEVEE_NEXT'
-    except TypeError:
-        scene.render.engine = 'BLENDER_EEVEE'
-    try:
-        scene.eevee.use_raytracing = True
-        scene.eevee.taa_render_samples = samples
-        # Ambient occlusion and higher-quality shadows/GI - this is a
-        # one-off "make it look as good as possible" render, not the live
-        # viewport, so the extra cost is worth it. Confirmed via a live
-        # property probe: shadow_resolution_scale's own hard max is 1.0
-        # (already the default, nothing to raise there), so the real
-        # levers are AO and shadow ray/step counts.
-        scene.eevee.use_gtao = True
-        scene.eevee.gtao_quality = 1.0
-        scene.eevee.gtao_distance = 0.3
-        scene.eevee.use_shadows = True
-        scene.eevee.shadow_ray_count = 3
-        scene.eevee.shadow_step_count = 12
-        scene.eevee.gi_diffuse_bounces = 4
-    except Exception:
-        pass
+        cycles.denoiser = 'OPENIMAGEDENOISE'
+        cycles.denoising_use_gpu = False
+    except (AttributeError, TypeError):
+        pass  # older Cycles without a denoiser choice / GPU-denoise toggle
     scene.render.resolution_x = resolution[0]
     scene.render.resolution_y = resolution[1]
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = 'PNG'
+    scene.render.image_settings.color_mode = 'RGB'
+    scene.render.image_settings.compression = 60
 
 
-def render_showcase(filepath, resolution=(3840, 2160), samples=256):
+def render_showcase(filepath, resolution=(3840, 2160), samples=DEFAULT_SHOWCASE_SAMPLES):
     import bpy
 
     configure_render_settings(resolution=resolution, samples=samples)
@@ -209,26 +221,18 @@ def render_showcase(filepath, resolution=(3840, 2160), samples=256):
     bpy.ops.render.render(write_still=True)
 
 
-def render_interior_view(filepath, resolution=(1920, 1080), samples=128):
-    """Interior-through-glass shots need genuine ray tracing, not EEVEE
-    Next's screen-space transmission. Screen-space methods only reflect/
-    refract data already visible somewhere on screen - a room whose only
-    visibility is through the very window being looked through has no
-    other screen-space data to draw from, so EEVEE Next renders it as an
-    empty pale gradient (confirmed empirically: identical camera and
-    scene, EEVEE Next showed a flat pale wall, Cycles clearly showed the
-    ground-floor interior point light glowing through the glass). Cycles
-    is meaningfully slower (~100s for a 1920x1080/128-sample building in
-    testing, vs ~5s for the same shot in EEVEE) - a deliberate trade for
-    a feature whose entire point is "actually show me the interior",
-    and a lower default resolution than the 4K showcase render to keep
-    the wait reasonable for a single close-up building shot."""
+def render_interior_view(filepath, resolution=(1920, 1080), samples=DEFAULT_SHOWCASE_SAMPLES):
+    """Interior-through-glass shots need genuine ray tracing: a room whose
+    only visibility is through the very window being looked through has no
+    other screen-space data for a rasterizer's screen-space transmission to
+    draw from, so EEVEE rendered it as an empty pale gradient (confirmed
+    empirically) while Cycles shows the ground-floor interior and its
+    point light glowing through the glass. Since v0.10.0 the showcase
+    render is Cycles too (see configure_render_settings), so both shots
+    share one setup; the interior keeps a lower default resolution than
+    the 4K showcase because it is a single close-up building shot."""
     import bpy
 
-    scene = bpy.context.scene
-    scene.render.engine = 'CYCLES'
-    scene.cycles.samples = samples
-    scene.render.resolution_x = resolution[0]
-    scene.render.resolution_y = resolution[1]
-    scene.render.filepath = filepath
+    configure_render_settings(resolution=resolution, samples=samples)
+    bpy.context.scene.render.filepath = filepath
     bpy.ops.render.render(write_still=True)

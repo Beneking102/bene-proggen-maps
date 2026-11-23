@@ -14,28 +14,59 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - run: pip install numpy pytest
 
-      - run: pytest procgen_maps/tests/test_generators.py procgen_maps/tests/test_materials.py procgen_maps/tests/test_exporters.py -v
+      # The root conftest.py puts the repository on sys.path, so the bare
+      # `pytest` CLI (which, unlike `python -m pytest`, does not add the
+      # current directory) can import `procgen_maps`.
+      - run: pytest procgen_maps/tests -v
 
   blender-smoke:
     name: blender-smoke
     runs-on: ubuntu-latest
-    continue-on-error: true
+    env:
+      BLENDER_VERSION: 4.5.11
+      BLENDER_SERIES: Blender4.5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Download portable Blender 4.5 LTS
+      # The portable Linux build dynamically links a handful of X11/GL
+      # client libraries that a headless runner image does not guarantee
+      # (Blender needs them to load even in --background mode).
+      - name: Install Blender runtime libraries
         run: |
-          curl -L -o blender.tar.xz https://download.blender.org/release/Blender4.5/blender-4.5.11-linux-x64.tar.xz
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon0 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxrandr2 \
+            libxinerama1 libxcursor1 libgl1 libegl1 libsm6 libice6
+
+      - name: Cache portable Blender
+        id: blender-cache
+        uses: actions/cache@v4
+        with:
+          path: blender
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64
+
+      - name: Download portable Blender ${{ env.BLENDER_VERSION }} LTS
+        if: steps.blender-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fL -o blender.tar.xz "https://download.blender.org/release/${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
           mkdir blender
           tar -xf blender.tar.xz -C blender --strip-components=1
 
+      # --python-exit-code makes an uncaught Python exception fail the job
+      # (by default Blender exits 0 after printing the traceback). The
+      # render operators run Cycles on the CPU - there is no GPU/OpenGL
+      # context on a runner, which is exactly why the old EEVEE showcase
+      # render used to abort this job with SIGABRT (exit code 134).
       - name: Run Blender smoke tests
-        run: ./blender/blender --background --factory-startup --python procgen_maps/tests/blender_integration/run_smoke_tests.py
+        run: |
+          ./blender/blender --version
+          ./blender/blender --background --factory-startup --python-exit-code 1 \
+            --python procgen_maps/tests/blender_integration/run_smoke_tests.py

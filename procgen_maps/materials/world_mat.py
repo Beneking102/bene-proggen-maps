@@ -33,14 +33,31 @@ def get_or_create_sky_world(sun_elevation=0.6, sun_rotation=2.4, sun_energy=1.0)
 
     sky = nodes.new("ShaderNodeTexSky")
     sky.location = (-300, 0)
-    sky.sky_type = 'NISHITA'
+    _set_physical_sky_model(sky)
     sky.sun_elevation = sun_elevation
     sky.sun_rotation = sun_rotation
-    sky.air_density = 1.0
-    sky.dust_density = 1.0
+    for prop_name in ("air_density", "dust_density"):
+        # dust_density exists on Blender 4.x's Nishita model only; 5.x's
+        # multiple-scattering model dropped it (air_density survived).
+        if hasattr(sky, prop_name):
+            setattr(sky, prop_name, 1.0)
     links.new(sky.outputs["Color"], background.inputs["Color"])
 
     return world
+
+
+def _set_physical_sky_model(sky_node):
+    """Blender 4.x calls the physically based sky model 'NISHITA'; Blender
+    5.0 replaced it with 'MULTIPLE_SCATTERING' (plus 'SINGLE_SCATTERING')
+    and dropped the old identifier entirely, so assigning 'NISHITA' there
+    raises TypeError and broke Generate Terrain outright. Both models share
+    the same sun_elevation/sun_rotation/air/dust inputs, so everything else
+    in this module is version-agnostic."""
+    valid = {item.identifier for item in sky_node.bl_rna.properties["sky_type"].enum_items}
+    for candidate in ("NISHITA", "MULTIPLE_SCATTERING"):
+        if candidate in valid:
+            sky_node.sky_type = candidate
+            return
 
 
 def set_sun_position(world, sun_elevation, sun_rotation):
