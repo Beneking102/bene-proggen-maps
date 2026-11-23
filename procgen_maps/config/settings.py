@@ -15,7 +15,8 @@ DEFAULT_SEED = 0
 # octave, and roughly half the old amplitude keep the mesh a much closer
 # match to the sampled field, and read as a real city site rather than raw
 # mountain terrain.
-TERRAIN_DEFAULT_RESOLUTION = 512      # heightmap resolution (cells per side)
+TERRAIN_DEFAULT_RESOLUTION = 512      # heightmap resolution (cells per side) at the default world size
+TERRAIN_MAX_RESOLUTION = 1024         # cap when the world grows with the preset radius (ui/operators.py)
 TERRAIN_DEFAULT_SCALE = 160.0         # noise feature scale, meters
 TERRAIN_DEFAULT_OCTAVES = 4
 TERRAIN_DEFAULT_PERSISTENCE = 0.5

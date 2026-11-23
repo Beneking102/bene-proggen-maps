@@ -19,9 +19,17 @@ _LAMP_LIGHT_SUFFIX = "_light"
 def _get_terrain_params(scene) -> terrain_gen.TerrainParams:
     settings = scene.procgen_maps
     preset = preset_config.get_preset(settings.preset)
+    # Big presets need ground well past the city (the forest ring reaches
+    # 1.9x radius, and a low camera angle otherwise sees the terrain edge
+    # against the sky). Resolution grows with the world so the cell size
+    # stays ~2 m - see config/settings.py for why that matters.
+    world_size = max(global_settings.TERRAIN_DEFAULT_WORLD_SIZE, preset.radius * 4.2)
+    resolution = min(global_settings.TERRAIN_MAX_RESOLUTION,
+                     int(round(global_settings.TERRAIN_DEFAULT_RESOLUTION
+                               * world_size / global_settings.TERRAIN_DEFAULT_WORLD_SIZE)))
     return terrain_gen.TerrainParams(
-        resolution=global_settings.TERRAIN_DEFAULT_RESOLUTION,
-        world_size=max(global_settings.TERRAIN_DEFAULT_WORLD_SIZE, preset.radius * 2.5),
+        resolution=resolution,
+        world_size=world_size,
         scale=global_settings.TERRAIN_DEFAULT_SCALE,
         octaves=global_settings.TERRAIN_DEFAULT_OCTAVES,
         persistence=global_settings.TERRAIN_DEFAULT_PERSISTENCE,
@@ -97,16 +105,57 @@ def apply_sun_settings(context):
     (day/night) is currently active. Called by apply_night_mode and by
     every sun-field's live update= callback, so dragging any one of them
     always re-applies the full, currently-correct set."""
+    from ..materials import atmosphere
+
     settings = context.scene.procgen_maps
     world = context.scene.world
     if settings.night_mode:
         world_mat.set_sun_position(world, sun_elevation=settings.night_sun_elevation,
                                     sun_rotation=settings.sun_rotation)
         world_mat.set_sun_energy(world, settings.sun_energy_night)
+        context.scene.view_settings.exposure = settings.exposure_night
+        # At night the haze is the dark sky, not a bright veil.
+        atmosphere.set_haze(settings.haze_strength * 0.5, (0.02, 0.025, 0.04, 1.0))
     else:
         world_mat.set_sun_position(world, sun_elevation=settings.sun_elevation,
                                     sun_rotation=settings.sun_rotation)
         world_mat.set_sun_energy(world, settings.sun_energy_day)
+        context.scene.view_settings.exposure = settings.exposure_day
+        atmosphere.set_haze(settings.haze_strength, atmosphere.haze_color_for_sun(settings.sun_elevation))
+    _apply_view_transform(context.scene)
+
+
+def _apply_view_transform(scene):
+    """AgX with a bit more contrast than its base look - the procedural
+    sky/sun are physically bright, and the base AgX curve on top of that
+    reads flat and milky (the washed-out look of every pre-0.10 render)."""
+    view = scene.view_settings
+    for transform in ("AgX", "Filmic"):
+        try:
+            view.view_transform = transform
+            break
+        except TypeError:
+            continue
+    for look in ("AgX - Medium High Contrast", "Medium High Contrast", "None"):
+        try:
+            view.look = look
+            break
+        except TypeError:
+            continue
+
+
+def apply_lighting_preset(context, key: str):
+    from . import LIGHTING_PRESETS
+
+    settings = context.scene.procgen_maps
+    elevation, rotation, energy, exposure = LIGHTING_PRESETS[key]
+    # Writing these fields triggers their own update callbacks, each of
+    # which re-applies the full sun state - harmless, just redundant.
+    settings.sun_elevation = elevation
+    settings.sun_rotation = rotation
+    settings.sun_energy_day = energy
+    settings.exposure_day = exposure
+    apply_sun_settings(context)
 
 
 def apply_window_emission(context, strength: float):
@@ -305,6 +354,31 @@ class PROCGEN_OT_generate_dungeon(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class PROCGEN_OT_generate_all(bpy.types.Operator):
+    bl_idname = "procgen_maps.generate_all"
+    bl_label = "Generate All"
+    bl_description = "Generate terrain and then the city in one go (the dungeon stays a separate button)"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        if bpy.ops.procgen_maps.generate_terrain() != {'FINISHED'}:
+            return {'CANCELLED'}
+        return bpy.ops.procgen_maps.generate_city()
+
+
+class PROCGEN_OT_randomize_seed(bpy.types.Operator):
+    bl_idname = "procgen_maps.randomize_seed"
+    bl_label = "Randomize Seed"
+    bl_description = "Pick a new random seed (regenerate afterwards to see it)"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        import random
+
+        context.scene.procgen_maps.seed = random.randint(0, 99999)
+        return {'FINISHED'}
+
+
 class PROCGEN_OT_export_gltf(bpy.types.Operator):
     bl_idname = "procgen_maps.export_gltf"
     bl_label = "Export glTF"
@@ -470,6 +544,8 @@ classes = (
     PROCGEN_OT_generate_terrain,
     PROCGEN_OT_generate_city,
     PROCGEN_OT_generate_dungeon,
+    PROCGEN_OT_generate_all,
+    PROCGEN_OT_randomize_seed,
     PROCGEN_OT_export_gltf,
     PROCGEN_OT_export_fbx,
     PROCGEN_OT_export_usdz,

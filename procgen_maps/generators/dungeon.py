@@ -220,6 +220,48 @@ def _wall_segments_with_gaps(wall_min: float, wall_max: float,
     return segments
 
 
+_PILLAR_MIN_ROOM_SIDE = 9.0      # meters; rooms narrower than this on either axis get no pillars
+_PILLAR_INSET = 2.2              # meters from the walls to the outer pillar line
+_PILLAR_SPACING = 4.5            # meters between pillars (rounded to fit the room)
+_PILLAR_SIZE = 0.6               # meters, square column side
+_DAIS_SIZE_FRACTION = 0.3        # boss-room dais side as a fraction of the room's shorter side
+_DAIS_HEIGHT = 0.35
+
+
+def plan_room_features(room: Room, room_type: str) -> List[Tuple[str, float, float, float]]:
+    """(kind, x, y, size) decorations for a room, derived purely from its
+    own size/type so the result is deterministic and unit-testable:
+
+    - "pillar": a grid of square columns in any room at least
+      _PILLAR_MIN_ROOM_SIDE on both sides (the inner ring stays
+      _PILLAR_INSET off the walls, so doorways are never blocked and the
+      room reads as a hall rather than an empty box);
+    - "dais": one raised square platform in the middle of the boss room.
+
+    Pillars are skipped where the dais is, so the boss hall keeps its
+    center clear."""
+    features: List[Tuple[str, float, float, float]] = []
+    cx, cy = room.center
+    dais_size = 0.0
+    if room_type == "boss":
+        dais_size = max(2.0, min(room.width, room.height) * _DAIS_SIZE_FRACTION)
+        features.append(("dais", cx, cy, dais_size))
+
+    if room.width >= _PILLAR_MIN_ROOM_SIDE and room.height >= _PILLAR_MIN_ROOM_SIDE:
+        span_x = room.width - 2 * _PILLAR_INSET
+        span_y = room.height - 2 * _PILLAR_INSET
+        count_x = max(2, round(span_x / _PILLAR_SPACING) + 1)
+        count_y = max(2, round(span_y / _PILLAR_SPACING) + 1)
+        for i in range(count_x):
+            for j in range(count_y):
+                x = room.x + _PILLAR_INSET + span_x * i / (count_x - 1)
+                y = room.y + _PILLAR_INSET + span_y * j / (count_y - 1)
+                if dais_size and abs(x - cx) < dais_size / 2 + _PILLAR_SIZE and abs(y - cy) < dais_size / 2 + _PILLAR_SIZE:
+                    continue
+                features.append(("pillar", x, y, _PILLAR_SIZE))
+    return features
+
+
 def _torch_position_for_doorway(room: Room, wall: str, position: float, half_width: float
                                  ) -> Tuple[float, float, float]:
     """Mount a torch just to one side of a doorway (not inside the gap
@@ -276,6 +318,12 @@ def build_dungeon_mesh(layout: DungeonLayout, collection) -> list:
             for torch_obj in _build_torch(f"{TORCH_PREFIX}_{room.id}_{index}", torch_pos):
                 dungeon_collection.objects.link(torch_obj)
                 created.append(torch_obj)
+
+        features = plan_room_features(room, room_type)
+        if features:
+            feature_obj = _build_room_features(f"{ROOM_PREFIX}_{room.id}_Features", features, layout.wall_height)
+            dungeon_collection.objects.link(feature_obj)
+            created.append(feature_obj)
 
     for corridor in layout.corridors:
         obj = _build_corridor_mesh(corridor)
@@ -348,6 +396,41 @@ def _build_room_mesh(room: Room, wall_height: float,
         else:
             poly.material_index = 2
 
+    return bpy.data.objects.new(name, mesh)
+
+
+def _build_room_features(name: str, features, wall_height: float):
+    """One mesh per room holding all its pillars (floor to ceiling, wall
+    material) and dais (boss floor tint) as simple boxes."""
+    import bpy
+
+    from ..materials import dungeon_mat
+
+    verts: list = []
+    faces: list = []
+    material_index: list = []
+
+    def add_box(x0, y0, z0, x1, y1, z1, slot):
+        base = len(verts)
+        verts.extend([(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+                      (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)])
+        for face in ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)):
+            faces.append(tuple(base + i for i in face))
+            material_index.append(slot)
+
+    for kind, x, y, size in features:
+        half = size / 2.0
+        if kind == "pillar":
+            add_box(x - half, y - half, 0.0, x + half, y + half, wall_height, 0)
+        elif kind == "dais":
+            add_box(x - half, y - half, 0.0, x + half, y + half, _DAIS_HEIGHT, 1)
+
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update(calc_edges=True)
+    mesh.materials.append(dungeon_mat.get_or_create_dungeon_material("wall"))
+    mesh.materials.append(dungeon_mat.get_or_create_dungeon_material("floor_boss"))
+    mesh.polygons.foreach_set("material_index", material_index)
     return bpy.data.objects.new(name, mesh)
 
 

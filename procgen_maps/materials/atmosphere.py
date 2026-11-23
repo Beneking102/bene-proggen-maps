@@ -25,9 +25,9 @@ DENSITY_NODE_NAME = "ProcgenMaps_HazeDensity"
 COLOR_NODE_NAME = "ProcgenMaps_HazeColor"
 
 # `haze_strength` (0..1 Lighting-panel slider) -> optical density per meter.
-# 1.0 means ~50% fade at 500 m; the default 0.4 leaves a 400 m-radius
-# city's far edge visibly softer but still fully legible.
-DENSITY_PER_STRENGTH = 0.0014
+# 1.0 means ~63% fade at 500 m; the default 0.4 gives ~33% at 500 m, so a
+# 400 m-radius city's far edge is visibly softer but still fully legible.
+DENSITY_PER_STRENGTH = 0.002
 DEFAULT_HAZE_STRENGTH = 0.4
 DEFAULT_HAZE_COLOR = (0.62, 0.70, 0.82, 1.0)
 

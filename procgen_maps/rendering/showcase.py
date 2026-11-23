@@ -205,6 +205,12 @@ def configure_render_settings(resolution=(3840, 2160), samples=DEFAULT_SHOWCASE_
         cycles.denoising_use_gpu = False
     except (AttributeError, TypeError):
         pass  # older Cycles without a denoiser choice / GPU-denoise toggle
+    # Glass windows with interiors behind them need a few transmission
+    # bounces; everything else is cheap. Clamp indirect light a little to
+    # keep fireflies from the sun disc out of the low-sample renders.
+    cycles.max_bounces = 8
+    cycles.transmission_bounces = 6
+    cycles.sample_clamp_indirect = 8.0
     scene.render.resolution_x = resolution[0]
     scene.render.resolution_y = resolution[1]
     scene.render.resolution_percentage = 100

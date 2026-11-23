@@ -43,8 +43,31 @@ _ROUGHNESS_OVERRIDES = {
 }
 
 
+# Keys whose color is varied per *instance* through Object Info > Random
+# (Cycles gives every collection instance its own random value), so a
+# street of identical tree/car meshes doesn't read as copy-paste: (hue
+# shift range, value/brightness range).
+_PER_INSTANCE_VARIATION = {
+    "tree_canopy": (0.05, (0.75, 1.25)),
+    "tree_trunk": (0.02, (0.8, 1.2)),
+    "bench": (0.02, (0.8, 1.15)),
+}
+
+# Parked cars: a palette picked per instance instead of one blue for all.
+_CAR_PALETTE = (
+    (0.80, 0.80, 0.82, 1.0),   # silver
+    (0.08, 0.08, 0.09, 1.0),   # black
+    (0.55, 0.08, 0.06, 1.0),   # red
+    (0.12, 0.20, 0.45, 1.0),   # blue
+    (0.85, 0.85, 0.85, 1.0),   # white
+    (0.25, 0.26, 0.28, 1.0),   # graphite
+)
+
+
 def get_or_create_prop_material(key: str):
     import bpy
+
+    from . import atmosphere
 
     name = f"ProcgenMaps_Prop_{key}"
     existing = bpy.data.materials.get(name)
@@ -55,8 +78,69 @@ def get_or_create_prop_material(key: str):
     mat = bpy.data.materials.new(name)
     mat.diffuse_color = color
     mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf = next((n for n in mat.node_tree.nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"), None)
     if bsdf is not None:
         bsdf.inputs["Base Color"].default_value = color
         bsdf.inputs["Roughness"].default_value = _ROUGHNESS_OVERRIDES.get(key, 0.75)
+        if key == "car":
+            _add_car_palette(mat, bsdf)
+        elif key in _PER_INSTANCE_VARIATION:
+            _add_instance_variation(mat, bsdf, color, *_PER_INSTANCE_VARIATION[key])
+    atmosphere.apply_haze(mat)
     return mat
+
+
+def _add_instance_variation(mat, bsdf, color, hue_range, value_range):
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    info = nodes.new("ShaderNodeObjectInfo")
+    info.location = (-700, -200)
+    hue = nodes.new("ShaderNodeMapRange")
+    hue.location = (-500, -100)
+    hue.inputs["To Min"].default_value = 0.5 - hue_range
+    hue.inputs["To Max"].default_value = 0.5 + hue_range
+    links.new(info.outputs["Random"], hue.inputs["Value"])
+    # A second, decorrelated random from the same value for brightness.
+    second = nodes.new("ShaderNodeMath")
+    second.location = (-500, -300)
+    second.operation = 'FRACT'
+    scaled = nodes.new("ShaderNodeMath")
+    scaled.location = (-650, -400)
+    scaled.operation = 'MULTIPLY'
+    scaled.inputs[1].default_value = 7.31
+    links.new(info.outputs["Random"], scaled.inputs[0])
+    links.new(scaled.outputs[0], second.inputs[0])
+    value = nodes.new("ShaderNodeMapRange")
+    value.location = (-300, -300)
+    value.inputs["To Min"].default_value = value_range[0]
+    value.inputs["To Max"].default_value = value_range[1]
+    links.new(second.outputs[0], value.inputs["Value"])
+    hsv = nodes.new("ShaderNodeHueSaturation")
+    hsv.location = (-100, 0)
+    hsv.inputs["Color"].default_value = color
+    links.new(hue.outputs["Result"], hsv.inputs["Hue"])
+    links.new(value.outputs["Result"], hsv.inputs["Value"])
+    links.new(hsv.outputs["Color"], bsdf.inputs["Base Color"])
+
+
+def _add_car_palette(mat, bsdf):
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    info = nodes.new("ShaderNodeObjectInfo")
+    info.location = (-500, -200)
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-300, 0)
+    ramp.color_ramp.interpolation = 'CONSTANT'
+    elements = ramp.color_ramp.elements
+    elements[0].position = 0.0
+    elements[0].color = _CAR_PALETTE[0]
+    for index, color in enumerate(_CAR_PALETTE[1:], start=1):
+        element = elements.new(index / len(_CAR_PALETTE))
+        element.color = color
+    links.new(info.outputs["Random"], ramp.inputs["Fac"])
+    links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    bsdf.inputs["Roughness"].default_value = 0.3
+    try:
+        bsdf.inputs["Coat Weight"].default_value = 0.6   # clear-coat car paint
+    except KeyError:
+        pass

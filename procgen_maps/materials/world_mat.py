@@ -32,16 +32,61 @@ def get_or_create_sky_world(sun_elevation=0.6, sun_rotation=2.4, sun_energy=1.0)
     links.new(background.outputs["Background"], output.inputs["Surface"])
 
     sky = nodes.new("ShaderNodeTexSky")
-    sky.location = (-300, 0)
+    sky.location = (-600, 0)
     _set_physical_sky_model(sky)
     sky.sun_elevation = sun_elevation
     sky.sun_rotation = sun_rotation
-    for prop_name in ("air_density", "dust_density"):
-        # dust_density exists on Blender 4.x's Nishita model only; 5.x's
-        # multiple-scattering model dropped it (air_density survived).
+    if hasattr(sky, "ground_albedo"):
+        # Below the horizon the physical sky is black; a grassy albedo
+        # gives it the faint bounce glow a real landscape horizon has.
+        sky.ground_albedo = 0.3
+
+    # Zenith lift: at the -2.4 EV the daytime presets need, the physical
+    # sky's zenith is ~10x darker than its horizon and renders near-black.
+    # Adding a small constant (before the Background strength, so night
+    # mode's 0.05 strength scales it down too) keeps it a deep blue and
+    # doubles as a little ambient fill in the shadows.
+    lift = nodes.new("ShaderNodeMix")
+    lift.location = (-300, 0)
+    lift.data_type = 'RGBA'
+    lift.blend_type = 'ADD'
+    lift.inputs[0].default_value = 1.0
+    lift.inputs[7].default_value = (0.35, 0.5, 0.8, 1.0)
+    links.new(sky.outputs["Color"], lift.inputs[6])
+
+    # Below the horizon (view direction z < 0) the physical sky is a flat
+    # dark disc; where a low camera looks past the terrain edge that read
+    # as a black sea. Blend to a pale hazy ground tone there instead - it
+    # only matters for that band and for reflections.
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    tex_coord.location = (-900, -300)
+    direction = nodes.new("ShaderNodeSeparateXYZ")
+    direction.location = (-700, -300)
+    links.new(tex_coord.outputs["Generated"], direction.inputs["Vector"])
+    below = nodes.new("ShaderNodeMapRange")
+    below.location = (-500, -300)
+    below.inputs["From Min"].default_value = -0.02
+    below.inputs["From Max"].default_value = 0.0
+    below.inputs["To Min"].default_value = 1.0
+    below.inputs["To Max"].default_value = 0.0
+    links.new(direction.outputs["Z"], below.inputs["Value"])
+    ground = nodes.new("ShaderNodeMix")
+    ground.location = (-150, -200)
+    ground.data_type = 'RGBA'
+    ground.blend_type = 'MIX'
+    ground.inputs[7].default_value = (2.2, 2.6, 3.2, 1.0)
+    links.new(below.outputs["Result"], ground.inputs[0])
+    links.new(lift.outputs[2], ground.inputs[6])
+    # Extra dust/aerosol gives a paler, hazier sky dome than the deep
+    # ultramarine the physical model produces at the exposure the addon
+    # uses (-2.4 EV by default). dust_density is Blender 4.x's Nishita
+    # name, aerosol_density the 5.x multiple-scattering model's.
+    if hasattr(sky, "air_density"):
+        sky.air_density = 1.0
+    for prop_name in ("dust_density", "aerosol_density"):
         if hasattr(sky, prop_name):
-            setattr(sky, prop_name, 1.0)
-    links.new(sky.outputs["Color"], background.inputs["Color"])
+            setattr(sky, prop_name, 2.5)
+    links.new(ground.outputs[2], background.inputs["Color"])
 
     return world
 

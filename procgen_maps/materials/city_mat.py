@@ -25,6 +25,7 @@ both pure shading tricks, no extra geometry or texture files needed.
 
 CITY_MATERIAL_NAME = "ProcgenMaps_CityFacade"
 WINDOW_MATERIAL_NAME = "ProcgenMaps_CityWindow"
+ROOF_MATERIAL_NAME = "ProcgenMaps_CityRoof"
 NIGHT_MODE_NODE_NAME = "ProcgenMaps_NightModeFactor"
 NIGHT_PULSE_NODE_NAME = "ProcgenMaps_NightPulseTime"
 _NIGHT_PULSE_SPEED = 0.045       # radians/frame fed into the pulse sine, independent of set_night_mode's own value
@@ -53,6 +54,8 @@ _FACADE_COLORS = (
 
 def get_or_create_city_material():
     import bpy
+
+    from . import atmosphere
 
     existing = bpy.data.materials.get(CITY_MATERIAL_NAME)
     if existing is not None:
@@ -154,6 +157,204 @@ def get_or_create_city_material():
     links.new(grain_noise.outputs["Fac"], bump.inputs["Height"])
     links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
 
+    _add_weathering(mat, bsdf, grain_mix.outputs[2], grain_noise.outputs["Fac"])
+    atmosphere.apply_haze(mat)
+    return mat
+
+
+def _add_weathering(mat, bsdf, color_socket, grain_socket):
+    """Weathering on top of the flat facade color, so buildings stop
+    looking like freshly painted boxes:
+
+    - a ground-level grime band (darker over the lowest ~3 m, read from
+      the building's own `procgen_maps_base_z`, since object space equals
+      world space for these meshes);
+    - vertical rain streaks (a noise stretched 12:1 in Z);
+    - a thin darker line at every floor slab (`procgen_maps_floor_height`),
+      which gives towers a readable floor rhythm between the windows;
+    - roughness that varies with the grain instead of one constant."""
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+
+    def new(bl_idname, x, y):
+        node = nodes.new(bl_idname)
+        node.location = (x, y)
+        return node
+
+    def math(op, a, b=0.0, x=0, y=0):
+        node = new("ShaderNodeMath", x, y)
+        node.operation = op
+        for index, value in ((0, a), (1, b)):
+            if isinstance(value, (int, float)):
+                node.inputs[index].default_value = value
+            else:
+                links.new(value, node.inputs[index])
+        return node.outputs[0]
+
+    def attribute(name, x, y):
+        node = new("ShaderNodeAttribute", x, y)
+        node.attribute_type = 'OBJECT'
+        node.attribute_name = name
+        return node.outputs["Fac"]
+
+    geometry = new("ShaderNodeNewGeometry", -1300, -700)
+    position = new("ShaderNodeSeparateXYZ", -1100, -700)
+    links.new(geometry.outputs["Position"], position.inputs["Vector"])
+    height = math('SUBTRACT', position.outputs["Z"], attribute("procgen_maps_base_z", -1300, -900), x=-900, y=-800)
+
+    grime = new("ShaderNodeMapRange", -700, -800)
+    links.new(height, grime.inputs["Value"])
+    grime.inputs["From Min"].default_value = 0.0
+    grime.inputs["From Max"].default_value = 3.0
+    grime.inputs["To Min"].default_value = 0.62
+    grime.inputs["To Max"].default_value = 1.0
+
+    stretch = new("ShaderNodeVectorMath", -1100, -1000)
+    stretch.operation = 'MULTIPLY'
+    stretch.inputs[1].default_value = (6.0, 6.0, 0.5)
+    links.new(geometry.outputs["Position"], stretch.inputs[0])
+    streak_noise = new("ShaderNodeTexNoise", -900, -1000)
+    streak_noise.inputs["Scale"].default_value = 1.0
+    streak_noise.inputs["Detail"].default_value = 3.0
+    links.new(stretch.outputs["Vector"], streak_noise.inputs["Vector"])
+    streaks = new("ShaderNodeMapRange", -700, -1000)
+    links.new(streak_noise.outputs["Fac"], streaks.inputs["Value"])
+    streaks.inputs["From Min"].default_value = 0.3
+    streaks.inputs["From Max"].default_value = 0.7
+    streaks.inputs["To Min"].default_value = 0.86
+    streaks.inputs["To Max"].default_value = 1.04
+
+    floor_height = math('MAXIMUM', attribute("procgen_maps_floor_height", -1300, -1200), 0.5, x=-1100, y=-1200)
+    floor_phase = math('FRACT', math('DIVIDE', height, floor_height, x=-900, y=-1200), x=-700, y=-1200)
+    slab_line = math('LESS_THAN', floor_phase, 0.035, x=-500, y=-1200)
+    slab = math('SUBTRACT', 1.0, math('MULTIPLY', slab_line, 0.22, x=-300, y=-1200), x=-100, y=-1200)
+
+    tone = math('MULTIPLY', math('MULTIPLY', grime.outputs["Result"], streaks.outputs["Result"], x=-300, y=-900),
+                slab, x=100, y=-900)
+    tone_rgb = new("ShaderNodeCombineColor", 300, -900)
+    for index in range(3):
+        links.new(tone, tone_rgb.inputs[index])
+
+    weathered = new("ShaderNodeMix", 500, -500)
+    weathered.data_type = 'RGBA'
+    weathered.blend_type = 'MULTIPLY'
+    weathered.inputs[0].default_value = 1.0
+    links.new(color_socket, weathered.inputs[6])
+    links.new(tone_rgb.outputs["Color"], weathered.inputs[7])
+    # Re-route the base color through the weathering.
+    for link in list(bsdf.inputs["Base Color"].links):
+        links.remove(link)
+    links.new(weathered.outputs[2], bsdf.inputs["Base Color"])
+
+    roughness = new("ShaderNodeMapRange", 300, -300)
+    links.new(grain_socket, roughness.inputs["Value"])
+    roughness.inputs["From Min"].default_value = 0.0
+    roughness.inputs["From Max"].default_value = 1.0
+    roughness.inputs["To Min"].default_value = 0.55
+    roughness.inputs["To Max"].default_value = 0.85
+    links.new(roughness.outputs["Result"], bsdf.inputs["Roughness"])
+
+
+_ROOF_COLORS = (
+    (0.17, 0.17, 0.17, 1.0),   # 0: flat roof - dark gravel/bitumen
+    (0.52, 0.22, 0.13, 1.0),   # 1: terracotta tiles
+    (0.19, 0.21, 0.25, 1.0),   # 2: slate
+    (0.30, 0.19, 0.11, 1.0),   # 3: dark brown shingles
+)
+
+
+def get_or_create_roof_material():
+    """Mesh slot 2 on every building: roof faces. Color picked per building
+    through `procgen_maps_roof_index` (0 = flat gravel, 1-3 = pitched-roof
+    tile colors, see generators/city/buildings.py), with a coarse noise so
+    gravel/tiles don't read as one flat paint. Previously roofs had no
+    material of their own: the roof cap shared the wall slot - and, due to
+    the window-column bug fixed in v0.10, was usually tagged as window
+    glass, which is why every flat roof rendered as dark blue."""
+    import bpy
+
+    from . import atmosphere
+
+    existing = bpy.data.materials.get(ROOF_MATERIAL_NAME)
+    if existing is not None:
+        return existing
+
+    mat = bpy.data.materials.new(ROOF_MATERIAL_NAME)
+    mat.diffuse_color = (0.2, 0.2, 0.2, 1.0)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (600, 0)
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (300, 0)
+    bsdf.inputs["Specular IOR Level"].default_value = 0.25
+    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+
+    attribute = nodes.new("ShaderNodeAttribute")
+    attribute.location = (-700, 200)
+    attribute.attribute_type = 'OBJECT'
+    attribute.attribute_name = "procgen_maps_roof_index"
+    divide = nodes.new("ShaderNodeMath")
+    divide.location = (-500, 200)
+    divide.operation = 'DIVIDE'
+    divide.inputs[1].default_value = float(len(_ROOF_COLORS) - 1)
+    links.new(attribute.outputs["Fac"], divide.inputs[0])
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-300, 200)
+    ramp.color_ramp.interpolation = 'CONSTANT'
+    elements = ramp.color_ramp.elements
+    elements[0].position = 0.0
+    elements[0].color = _ROOF_COLORS[0]
+    for index, color in enumerate(_ROOF_COLORS[1:], start=1):
+        element = elements.new(index / (len(_ROOF_COLORS) - 1))
+        element.color = color
+    links.new(divide.outputs["Value"], ramp.inputs["Fac"])
+
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    tex_coord.location = (-700, -200)
+    grain = nodes.new("ShaderNodeTexNoise")
+    grain.location = (-500, -200)
+    grain.inputs["Scale"].default_value = 3.0
+    grain.inputs["Detail"].default_value = 5.0
+    grain.inputs["Roughness"].default_value = 0.65
+    links.new(tex_coord.outputs["Object"], grain.inputs["Vector"])
+    grain_tone = nodes.new("ShaderNodeMapRange")
+    grain_tone.location = (-300, -200)
+    grain_tone.inputs["To Min"].default_value = 0.75
+    grain_tone.inputs["To Max"].default_value = 1.2
+    links.new(grain.outputs["Fac"], grain_tone.inputs["Value"])
+    grain_rgb = nodes.new("ShaderNodeCombineColor")
+    grain_rgb.location = (-100, -200)
+    for index in range(3):
+        links.new(grain_tone.outputs["Result"], grain_rgb.inputs[index])
+
+    mix = nodes.new("ShaderNodeMix")
+    mix.location = (100, 100)
+    mix.data_type = 'RGBA'
+    mix.blend_type = 'MULTIPLY'
+    mix.inputs[0].default_value = 1.0
+    links.new(ramp.outputs["Color"], mix.inputs[6])
+    links.new(grain_rgb.outputs["Color"], mix.inputs[7])
+    links.new(mix.outputs[2], bsdf.inputs["Base Color"])
+
+    roughness = nodes.new("ShaderNodeMapRange")
+    roughness.location = (-100, -400)
+    roughness.inputs["To Min"].default_value = 0.7
+    roughness.inputs["To Max"].default_value = 0.95
+    links.new(grain.outputs["Fac"], roughness.inputs["Value"])
+    links.new(roughness.outputs["Result"], bsdf.inputs["Roughness"])
+
+    bump = nodes.new("ShaderNodeBump")
+    bump.location = (100, -400)
+    bump.inputs["Strength"].default_value = 0.3
+    bump.inputs["Distance"].default_value = 0.05
+    links.new(grain.outputs["Fac"], bump.inputs["Height"])
+    links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+
+    atmosphere.apply_haze(mat)
     return mat
 
 
@@ -170,6 +371,8 @@ def get_or_create_window_material():
     EEVEE falls back to treating it as opaque."""
     import bpy
 
+    from . import atmosphere
+
     existing = bpy.data.materials.get(WINDOW_MATERIAL_NAME)
     if existing is not None:
         return existing
@@ -185,8 +388,10 @@ def get_or_create_window_material():
     output.location = (400, 0)
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
     bsdf.location = (100, 0)
-    bsdf.inputs["Base Color"].default_value = (0.55, 0.65, 0.70, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.05
+    # Slightly blue-green tinted glass; a touch of roughness so the sky
+    # reflection reads as a sheet of glass rather than a perfect mirror.
+    bsdf.inputs["Base Color"].default_value = (0.45, 0.58, 0.62, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.08
     bsdf.inputs["Transmission Weight"].default_value = 0.92
     bsdf.inputs["IOR"].default_value = 1.45
     bsdf.inputs["Emission Color"].default_value = (1.0, 0.85, 0.5, 1.0)
@@ -250,6 +455,7 @@ def get_or_create_window_material():
     links.new(pulse_factor.outputs["Result"], emission_strength.inputs[1])
     links.new(emission_strength.outputs["Value"], bsdf.inputs["Emission Strength"])
 
+    atmosphere.apply_haze(mat)
     return mat
 
 

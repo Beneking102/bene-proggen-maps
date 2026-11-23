@@ -18,7 +18,9 @@ class PROCGEN_PT_main_panel(bpy.types.Panel):
         settings = context.scene.procgen_maps
 
         layout.prop(settings, "preset")
-        layout.prop(settings, "seed")
+        row = layout.row(align=True)
+        row.prop(settings, "seed")
+        row.operator("procgen_maps.randomize_seed", text="", icon='FILE_REFRESH')
 
         col = layout.column(align=True)
         col.prop(settings, "use_terrain")
@@ -27,9 +29,11 @@ class PROCGEN_PT_main_panel(bpy.types.Panel):
         col.prop(settings, "enable_cars")
 
         layout.separator()
-        layout.operator("procgen_maps.generate_terrain")
-        layout.operator("procgen_maps.generate_city")
-        layout.operator("procgen_maps.generate_dungeon")
+        layout.operator("procgen_maps.generate_all", icon='PLAY')
+        col = layout.column(align=True)
+        col.operator("procgen_maps.generate_terrain")
+        col.operator("procgen_maps.generate_city")
+        col.operator("procgen_maps.generate_dungeon")
 
         layout.separator()
         layout.prop(settings, "night_mode", toggle=True)
@@ -89,6 +93,7 @@ class PROCGEN_PT_lighting_panel(bpy.types.Panel):
         layout = self.layout
         settings = context.scene.procgen_maps
 
+        layout.prop(settings, "lighting_preset")
         layout.label(text="Sun")
         col = layout.column(align=True)
         col.prop(settings, "sun_elevation")
@@ -96,6 +101,10 @@ class PROCGEN_PT_lighting_panel(bpy.types.Panel):
         row = layout.row(align=True)
         row.prop(settings, "sun_energy_day")
         row.prop(settings, "sun_energy_night")
+        row = layout.row(align=True)
+        row.prop(settings, "exposure_day")
+        row.prop(settings, "exposure_night")
+        layout.prop(settings, "haze_strength", slider=True)
 
         layout.separator()
         layout.label(text="Night Mode")

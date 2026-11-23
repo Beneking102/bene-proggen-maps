@@ -31,6 +31,9 @@ _WINDOW_FREQUENCY_JITTER = 0.15
 _WIDTH_PITCH_JITTER = 0.15
 _FLOOR_HEIGHT_JITTER = 0.08
 _ROOFTOP_UNIT_CHANCE = 0.4
+_PARAPET_CHANCE = 0.7       # flat-roofed buildings (>= 2 floors) that get a parapet wall around a recessed roof
+_PARAPET_WIDTH = 0.4        # meters, parapet wall thickness
+_PARAPET_DROP = 0.5         # meters the roof deck sits below the parapet top
 
 BUILDINGS_PREFIX = "ProcgenMaps_Building"
 
@@ -171,18 +174,28 @@ def build_building_meshes(plans: List[BuildingPlan], terrain_params=None, collec
         if terrain_params is not None:
             base_z = terrain_gen.sample_world_height(cx, cy, terrain_params)
 
-        obj = _build_single_building(f"{BUILDINGS_PREFIX}_{index}", plan, base_z)
+        roof_rng = detail_rng(plan.block_id, "roof")
+        parapet = plan.facade.roof_style == "flat" and plan.floors >= 2 and roof_rng.random() < _PARAPET_CHANCE
+        roof_index = 0 if plan.facade.roof_style == "flat" else roof_rng.randint(1, 3)
+
+        obj = _build_single_building(f"{BUILDINGS_PREFIX}_{index}", plan, base_z, parapet=parapet)
         obj["procgen_maps_facade_type"] = plan.facade.key
         obj["procgen_maps_material_index"] = plan.facade.material_index
         obj["procgen_maps_tint"] = plan.tint
         obj["procgen_maps_block_id"] = plan.block_id
+        # Read by materials/city_mat.py: ground-level grime and the floor-slab
+        # lines need the building's own base height and floor pitch, and the
+        # roof shader picks its gravel/tile color by roof_index.
+        obj["procgen_maps_base_z"] = float(base_z)
+        obj["procgen_maps_floor_height"] = float(plan.floor_height)
+        obj["procgen_maps_roof_index"] = roof_index
         if collection is not None:
             collection.objects.link(obj)
         building_objects.append(obj)
 
         rng = detail_rng(plan.block_id, "detail")
         if plan.facade.roof_style == "flat" and plan.floors >= 2 and rng.random() < _ROOFTOP_UNIT_CHANCE:
-            roof_z = base_z + plan.floors * plan.floor_height
+            roof_z = base_z + plan.floors * plan.floor_height - (_PARAPET_DROP if parapet else 0.0)
             unit = factory.spawn("rooftop_unit", (cx + rng.uniform(-1.0, 1.0), cy + rng.uniform(-1.0, 1.0), roof_z),
                                   rotation_z=rng.uniform(0, math.tau), collection=collection)
             extra_objects.append(unit)
@@ -192,7 +205,7 @@ def build_building_meshes(plans: List[BuildingPlan], terrain_params=None, collec
     return building_objects, extra_objects
 
 
-def _build_single_building(name, plan: BuildingPlan, base_z: float):
+def _build_single_building(name, plan: BuildingPlan, base_z: float, parapet: bool = False):
     import bmesh
     import bpy
 
@@ -241,7 +254,13 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
 
     if plan.facade.roof_style != "flat":
         bm.faces.ensure_lookup_table()
-        _build_gable_roof(bm, top_face, plan.footprint)
+        roof_faces = _build_gable_roof(bm, top_face, plan.footprint)
+    elif parapet:
+        roof_faces = _build_parapet_roof(bm, top_face)
+    else:
+        roof_faces = [top_face]
+    for face in roof_faces:
+        face.material_index = 2
 
     bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
     mesh = bpy.data.meshes.new(name)
@@ -251,13 +270,30 @@ def _build_single_building(name, plan: BuildingPlan, base_z: float):
     # Slot 0 (wall) is left empty here - ui/operators.py assigns the shared
     # city facade material into it after building every object, so material
     # count stays flat regardless of city size. Slot 1 (window panes, tagged
-    # via face.material_index = 1 in _add_window_row) is filled immediately
-    # since every building shares the exact same window material too.
+    # via face.material_index = 1 in _carve_floor_windows) and slot 2 (roof
+    # faces) are filled immediately since every building shares those.
     from ...materials import city_mat
     mesh.materials.append(None)
     mesh.materials.append(city_mat.get_or_create_window_material())
+    mesh.materials.append(city_mat.get_or_create_roof_material())
 
     return bpy.data.objects.new(name, mesh)
+
+
+def _build_parapet_roof(bm, top_face):
+    """Turn a flat roof cap into a recessed deck surrounded by a parapet
+    wall: inset the cap by the parapet thickness (the ring stays at roof
+    height as the parapet's top), extrude the inner face and drop it by
+    _PARAPET_DROP, which creates the vertical inner parapet faces. Returns
+    the roof-deck face (the only face that gets the roof material; the
+    parapet top and its inner faces keep the wall material)."""
+    import bmesh
+
+    bmesh.ops.inset_individual(bm, faces=[top_face], thickness=_PARAPET_WIDTH, depth=0.0)
+    result = bmesh.ops.extrude_discrete_faces(bm, faces=[top_face])
+    deck = result["faces"][0]
+    bmesh.ops.translate(bm, verts=list(deck.verts), vec=(0.0, 0.0, -_PARAPET_DROP))
+    return [deck]
 
 
 def _face_sort_key(face):
@@ -419,10 +455,12 @@ def _build_gable_roof(bm, top_face, footprint):
     ridge_b = bm.verts.new(ridge_b_co)
 
     bm.faces.remove(top_face)
-    bm.faces.new((v0, v1, ridge_a, ridge_b))
-    bm.faces.new((v2, v3, ridge_b, ridge_a))
-    bm.faces.new((v1, v2, ridge_a))
-    bm.faces.new((v3, v0, ridge_b))
+    return [
+        bm.faces.new((v0, v1, ridge_a, ridge_b)),
+        bm.faces.new((v2, v3, ridge_b, ridge_a)),
+        bm.faces.new((v1, v2, ridge_a)),
+        bm.faces.new((v3, v0, ridge_b)),
+    ]
 
 
 _INTERIOR_WALL_MARGIN = 0.3     # meters inset from the exterior shell

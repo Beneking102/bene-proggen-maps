@@ -26,6 +26,21 @@ def _on_street_lamp_energy_update(self, context):
     operators.apply_street_lamp_energy(context, self.street_lamp_energy)
 
 
+def _on_lighting_preset_update(self, context):
+    operators.apply_lighting_preset(context, self.lighting_preset)
+
+
+# Lighting presets: (sun elevation rad, sun rotation rad, world strength, film exposure EV).
+# The procedural sky is physically bright, so every daytime preset carries a
+# negative exposure; the showcase render and the viewport both use it.
+LIGHTING_PRESETS = {
+    "MIDDAY": (1.05, 2.4, 1.0, -2.6),
+    "AFTERNOON": (0.6, 2.4, 1.0, -2.4),
+    "GOLDEN_HOUR": (0.12, 3.6, 1.0, -1.6),
+    "OVERCAST_SOFT": (0.75, 2.4, 0.35, -1.4),
+}
+
+
 class ProcgenMapsSettings(bpy.types.PropertyGroup):
     preset: bpy.props.EnumProperty(name="Preset", items=_PRESET_ITEMS, default="METROPOLE")
     seed: bpy.props.IntProperty(name="Seed", default=0, min=0)
@@ -55,10 +70,34 @@ class ProcgenMapsSettings(bpy.types.PropertyGroup):
                                              update=_on_sun_setting_update)
     sun_energy_night: bpy.props.FloatProperty(name="Sun Energy (Night)", default=0.05, min=0.0, max=10.0,
                                                update=_on_sun_setting_update)
-    window_emission_strength: bpy.props.FloatProperty(name="Window Glow Strength", default=0.25,
+    # Night defaults retuned for v0.10's AgX/exposure pipeline: +1 EV at
+    # night, a lower window glow (0.25 clipped every lit pane to white) and
+    # stronger lamps so their pools actually read on the ground.
+    window_emission_strength: bpy.props.FloatProperty(name="Window Glow Strength", default=0.12,
                                                         min=0.0, max=5.0, update=_on_window_emission_update)
-    street_lamp_energy: bpy.props.FloatProperty(name="Street Lamp Energy", default=400.0,
-                                                  min=0.0, max=2000.0, update=_on_street_lamp_energy_update)
+    street_lamp_energy: bpy.props.FloatProperty(name="Street Lamp Energy", default=1200.0,
+                                                  min=0.0, max=5000.0, update=_on_street_lamp_energy_update)
+    lighting_preset: bpy.props.EnumProperty(
+        name="Lighting Preset",
+        description="Sets sun elevation/rotation, world strength and film exposure together; "
+                    "the fields below stay editable afterwards",
+        items=(
+            ("AFTERNOON", "Afternoon", "Mid-height sun, neutral daylight (the default look)"),
+            ("MIDDAY", "Midday", "High sun, short shadows"),
+            ("GOLDEN_HOUR", "Golden Hour", "Low warm sun, long shadows, warm haze"),
+            ("OVERCAST_SOFT", "Soft Overcast", "Dimmer sky, lower contrast"),
+        ),
+        default="AFTERNOON", update=_on_lighting_preset_update)
+    haze_strength: bpy.props.FloatProperty(
+        name="Haze", default=0.4, min=0.0, max=1.0,
+        description="Aerial perspective: how strongly distant geometry fades toward the sky color",
+        update=_on_sun_setting_update)
+    exposure_day: bpy.props.FloatProperty(name="Exposure (Day)", default=-2.4, min=-8.0, max=4.0,
+                                           description="Film exposure (EV) applied in day mode",
+                                           update=_on_sun_setting_update)
+    exposure_night: bpy.props.FloatProperty(name="Exposure (Night)", default=1.0, min=-8.0, max=4.0,
+                                             description="Film exposure (EV) applied in night mode",
+                                             update=_on_sun_setting_update)
 
     export_directory: bpy.props.StringProperty(name="Export Directory", subtype='DIR_PATH',
                                                  default="//procgen_maps_export/")

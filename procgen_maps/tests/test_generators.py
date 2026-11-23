@@ -44,6 +44,7 @@ from procgen_maps.generators.dungeon import (
     _find_doorways,
     _wall_segments_with_gaps,
     generate_dungeon,
+    plan_room_features,
 )
 from procgen_maps.generators.terrain import TerrainParams, generate_heightmap, sample_world_height
 from procgen_maps.utils.math_helpers import clamp, lerp, remap, smoothstep
@@ -549,6 +550,34 @@ def test_generate_dungeon_is_deterministic():
     layout_a = generate_dungeon(DungeonParams(seed=3))
     layout_b = generate_dungeon(DungeonParams(seed=3))
     assert len(layout_a.rooms) == len(layout_b.rooms)
+
+
+def test_plan_room_features_pillars_only_in_large_rooms_and_clear_of_walls():
+    small = Room(0, 0.0, 0.0, 7.0, 6.0)
+    assert plan_room_features(small, "normal") == []
+    hall = Room(1, 10.0, 20.0, 18.0, 12.0)
+    features = plan_room_features(hall, "normal")
+    pillars = [f for f in features if f[0] == "pillar"]
+    assert len(pillars) >= 4 and all(f[0] == "pillar" for f in features)
+    for _kind, x, y, size in pillars:
+        assert hall.x + 2.0 <= x <= hall.x + hall.width - 2.0
+        assert hall.y + 2.0 <= y <= hall.y + hall.height - 2.0
+        assert size == pytest.approx(0.6)
+    assert plan_room_features(hall, "normal") == features   # deterministic
+
+
+def test_plan_room_features_boss_room_gets_a_clear_dais():
+    boss = Room(2, 0.0, 0.0, 16.0, 14.0)
+    features = plan_room_features(boss, "boss")
+    dais = [f for f in features if f[0] == "dais"]
+    assert len(dais) == 1
+    _kind, dx, dy, dsize = dais[0]
+    assert (dx, dy) == boss.center
+    assert dsize == pytest.approx(14.0 * 0.3)
+    for kind, x, y, size in features:
+        if kind == "pillar":
+            assert not (abs(x - dx) < dsize / 2 + 0.6 and abs(y - dy) < dsize / 2 + 0.6)
+    assert plan_room_features(boss, "start") == [f for f in plan_room_features(boss, "normal")]
 
 
 def test_find_doorways_detects_wall_and_position_for_each_direction():
