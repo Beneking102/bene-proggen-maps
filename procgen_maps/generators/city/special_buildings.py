@@ -76,16 +76,20 @@ SPECIAL_BUILDING_SPECS: Tuple[SpecialBuildingSpec, ...] = (
 SPECIAL_SPEC_BY_KEY: Dict[str, SpecialBuildingSpec] = {spec.facade.key: spec for spec in SPECIAL_BUILDING_SPECS}
 
 
-def plan_special_buildings(blocks: List[Block], zone_by_block: Dict[int, str], preset, seed=None
-                            ) -> Tuple[List[BuildingPlan], Set[int]]:
+def plan_special_buildings(blocks: List[Block], zone_by_block: Dict[int, str], preset, seed=None,
+                            street_graph=None) -> Tuple[List[BuildingPlan], Set[int]]:
     """Pick specific blocks for each special building type (the largest
     available block in an allowed zone, preferring ones not already claimed
     by an earlier special type), and return (plans, reserved_block_ids) -
     the latter so generators.city.buildings.plan_buildings can skip them
-    when placing the 12 generic facades."""
+    when placing the 12 generic facades. `street_graph` applies the same
+    road setback as plan_buildings (see setback.py)."""
+    from . import setback
+
     rng = np.random.default_rng((preset.seed if seed is None else seed) + 9973)
     plans: List[BuildingPlan] = []
     reserved: Set[int] = set()
+    roads = setback.roads_from_graph(street_graph, preset) if street_graph is not None else []
 
     non_park_blocks = [b for b in blocks if zone_by_block.get(b.id) != "park"]
     if not non_park_blocks:
@@ -112,6 +116,10 @@ def plan_special_buildings(blocks: List[Block], zone_by_block: Dict[int, str], p
             cx, cy = block.center
             hw = block.half_size[0] * shrink
             hh = block.half_size[1] * shrink
+            if roads:
+                limit_w, limit_h = setback.shrink_footprint_for_setback(
+                    block.center, block.half_size, setback.roads_near(block.center, block.half_size, roads))
+                hw, hh = min(hw, limit_w), min(hh, limit_h)
             footprint = [(cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)]
             tint = float(rng.random())
             plans.append(BuildingPlan(block.id, footprint, spec.floors, spec.floor_height, spec.facade, tint))
@@ -235,14 +243,17 @@ def _get_or_create_sign_material(key, color):
     if existing is not None:
         return existing
 
+    from ...materials import atmosphere
+
     mat = bpy.data.materials.new(name)
     mat.diffuse_color = color
     mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf = next((n for n in mat.node_tree.nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"), None)
     if bsdf is not None:
         bsdf.inputs["Base Color"].default_value = color
         bsdf.inputs["Emission Color"].default_value = color
         bsdf.inputs["Emission Strength"].default_value = 1.2
+    atmosphere.apply_haze(mat)
     return mat
 
 
@@ -254,12 +265,15 @@ def _get_or_create_helipad_material():
     if existing is not None:
         return existing
 
+    from ...materials import atmosphere
+
     color = (0.85, 0.15, 0.15, 1.0)
     mat = bpy.data.materials.new(name)
     mat.diffuse_color = color
     mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf = next((n for n in mat.node_tree.nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"), None)
     if bsdf is not None:
         bsdf.inputs["Base Color"].default_value = color
         bsdf.inputs["Roughness"].default_value = 0.6
+    atmosphere.apply_haze(mat)
     return mat

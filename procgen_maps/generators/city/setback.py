@@ -90,26 +90,38 @@ def shrink_footprint_for_setback(center: Tuple[float, float], half_size: Tuple[f
                                  roads: Sequence[Tuple[float, float, float, float, float]],
                                  required: float = SIDEWALK_WIDTH + SETBACK_MARGIN,
                                  min_half_size: float = MIN_HALF_SIZE,
-                                 max_iterations: int = 8) -> Tuple[float, float]:
+                                 max_iterations: int = 12) -> Tuple[float, float]:
     """Return (half_width, half_height) <= `half_size` such that the
     centered rectangle keeps at least `required` meters between its walls
-    and every road edge, shrinking both axes by the deficit until it does
-    (or until `min_half_size` is hit, for blocks a street actually runs
-    through, where no shrink can help). Shrinking toward the center can
-    only increase clearance, so the deficit loop converges in a couple of
-    steps; the roads list should be prefiltered to the block's own
-    neighborhood for speed (see roads_near)."""
+    and every road edge. Each step shrinks *one* axis by the current
+    deficit - whichever axis actually improves the clearance more - so a
+    road along the block's west side pulls the footprint in along x only
+    and leaves its depth alone. Stops when the clearance is met, or when
+    neither axis can improve it any further (a street running through the
+    block, or both axes at `min_half_size`). The roads list should be
+    prefiltered to the block's own neighborhood for speed (see roads_near)."""
     cx, cy = center
     hw, hh = half_size
+
+    def clearance_of(half_w, half_h):
+        return road_clearance((cx - half_w, cy - half_h, cx + half_w, cy + half_h), roads)
+
+    current = clearance_of(hw, hh)
     for _ in range(max_iterations):
-        if hw <= min_half_size and hh <= min_half_size:
-            break
-        clearance = road_clearance((cx - hw, cy - hh, cx + hw, cy + hh), roads)
-        deficit = required - clearance
+        deficit = required - current
         if deficit <= 1e-6:
             break
-        hw = max(min_half_size, hw - deficit)
-        hh = max(min_half_size, hh - deficit)
+        try_w = max(min_half_size, hw - deficit)
+        try_h = max(min_half_size, hh - deficit)
+        gain_w = clearance_of(try_w, hh) - current if try_w < hw else -1.0
+        gain_h = clearance_of(hw, try_h) - current if try_h < hh else -1.0
+        if max(gain_w, gain_h) <= 1e-9:
+            break
+        if gain_w >= gain_h:
+            hw = try_w
+        else:
+            hh = try_h
+        current = clearance_of(hw, hh)
     return hw, hh
 
 

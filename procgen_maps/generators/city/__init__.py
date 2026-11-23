@@ -30,14 +30,16 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     street_graph = streets.build_street_graph(city_layout.streets)
 
     special_plans, reserved_block_ids = special_buildings.plan_special_buildings(
-        city_layout.blocks, zone_by_block, preset, seed=seed)
+        city_layout.blocks, zone_by_block, preset, seed=seed, street_graph=street_graph)
     regular_blocks = [b for b in city_layout.blocks if b.id not in reserved_block_ids]
-    building_plans = buildings.plan_buildings(regular_blocks, zone_by_block, preset, seed=seed)
+    building_plans = buildings.plan_buildings(regular_blocks, zone_by_block, preset, seed=seed,
+                                              street_graph=street_graph)
     parking_lot_specs = parking.plan_parking_lots_for_supermarkets(city_layout.blocks, special_plans)
 
     prop_placements = props.plan_props(street_graph, city_layout.blocks, zone_by_block, preset, seed=seed,
                                         terrain_params=terrain_params,
-                                        building_plans=building_plans + special_plans)
+                                        building_plans=building_plans + special_plans,
+                                        city_radius=city_layout.radius)
 
     sign_placements = signage.plan_signage(street_graph, preset, seed=seed, terrain_params=terrain_params,
                                             building_plans=building_plans + special_plans,

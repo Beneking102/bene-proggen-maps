@@ -336,15 +336,18 @@ def _get_or_create_signage_material(key, color, emission_strength=0.0):
     if existing is not None:
         return existing
 
+    from ...materials import atmosphere
+
     mat = bpy.data.materials.new(name)
     mat.diffuse_color = color
     mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf = next((n for n in mat.node_tree.nodes if n.bl_idname == "ShaderNodeBsdfPrincipled"), None)
     if bsdf is not None:
         bsdf.inputs["Base Color"].default_value = color
         if emission_strength > 0.0:
             bsdf.inputs["Emission Color"].default_value = color
             bsdf.inputs["Emission Strength"].default_value = emission_strength
+    atmosphere.apply_haze(mat)
     return mat
 
 

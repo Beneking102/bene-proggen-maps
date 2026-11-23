@@ -25,6 +25,16 @@ _PARK_TREE_DENSITY = 0.02        # trees per square meter of park block area
 _CAR_SPACING = 10.0
 _SIGN_CHANCE_AT_SHOPFRONT = 0.6
 _PARK_FOUNTAIN_MIN_AREA = 400.0  # sq meters; smaller parks get benches/trees only, no centerpiece
+_SIDEWALK_PROP_INSET = 1.0       # meters from the curb to the lamp/tree line (inside the 2 m sidewalk)
+_CAR_LANE_INSET = 1.3            # meters from the curb to a parked car's centerline
+
+# City-edge forest: trees scattered in a ring outside the built-up radius,
+# thinning out with distance, so the city doesn't end in a hard line on
+# bare ground. Density is per square meter at the inner edge of the ring.
+_FOREST_RING_START = 1.06        # x city radius
+_FOREST_RING_END = 1.9           # x city radius
+_FOREST_DENSITY = 0.0028         # trees / sqm at the inner edge (~1 tree per 19 m)
+_FOREST_MAX_TREES = 3500
 
 
 @dataclass
@@ -36,8 +46,12 @@ class PropPlacement:
 
 
 def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int, str],
-                preset, seed=None, terrain_params=None, building_plans: List[BuildingPlan] = None) -> List[PropPlacement]:
+                preset, seed=None, terrain_params=None, building_plans: List[BuildingPlan] = None,
+                city_radius: float = None) -> List[PropPlacement]:
     """Compute collision-free placement points for all prop categories.
+
+    If `city_radius` is given, a forest ring is scattered outside it (see
+    plan_forest_ring) so the city blends into the landscape.
 
     If `terrain_params` is given, each prop's z is sampled from the same
     noise field as the terrain mesh/streets/buildings (see
@@ -81,8 +95,10 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
             continue
         dx, dy = (end[0] - start[0]) / length, (end[1] - start[1]) / length
         nx, ny = -dy, dx
-        half_width = preset.street_width_arterial if street_class == "arterial" else preset.street_width_local
-        offset = half_width / 2.0 + 1.5
+        width = preset.street_width_arterial if street_class == "arterial" else preset.street_width_local
+        # Lamps and trees stand on the sidewalk (streets.py builds one
+        # SIDEWALK_WIDTH wide along each curb), not out in the grass.
+        offset = width / 2.0 + _SIDEWALK_PROP_INSET
 
         n_lamps = max(1, int(length / (_LAMP_SPACING / density)))
         for i in range(n_lamps + 1):
@@ -97,7 +113,9 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
             try_place(rng.choice(tree_ids), x, y, rotation_z=rng.uniform(0, math.tau), scale=rng.uniform(0.85, 1.15))
 
         if preset.cars_enabled and street_class == "local" and length >= _CAR_SPACING:
-            car_offset = preset.street_width_local / 2.0 + 1.2
+            # Parked *on* the road, in the kerbside lane - previously the
+            # cars were offset 1.2 m *outside* the asphalt, i.e. on the grass.
+            car_offset = preset.street_width_local / 2.0 - _CAR_LANE_INSET
             n_cars = int(length / _CAR_SPACING)
             for i in range(n_cars):
                 if rng.random() > density:
@@ -129,7 +147,34 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         elif zone == "commercial" and rng.random() < _SIGN_CHANCE_AT_SHOPFRONT * density:
             try_place("sign", cx + hw * 0.95, cy, rotation_z=math.pi / 2.0)
 
+    if city_radius is not None and city_radius > 0.0:
+        for x, y, scale, rotation_z in plan_forest_ring(city_radius, rng):
+            try_place(rng.choice(tree_ids), x, y, rotation_z=rotation_z, scale=scale)
+
     return placements
+
+
+def plan_forest_ring(city_radius: float, rng: random.Random) -> List[Tuple[float, float, float, float]]:
+    """(x, y, scale, rotation_z) candidates for the city-edge forest: points
+    uniformly distributed over the ring [_FOREST_RING_START, _FOREST_RING_END]
+    x radius, each kept with a probability that falls off linearly with
+    distance so the forest thins out instead of ending in another hard
+    edge. Larger trees (up to 1.6x) than the manicured street trees. Pure
+    Python; callers push the result through the collision grid."""
+    inner = city_radius * _FOREST_RING_START
+    outer = city_radius * _FOREST_RING_END
+    ring_area = math.pi * (outer * outer - inner * inner)
+    count = min(_FOREST_MAX_TREES, int(ring_area * _FOREST_DENSITY))
+    candidates = []
+    for _ in range(count):
+        # Uniform in area: r = sqrt(u * (R^2 - r0^2) + r0^2).
+        r = math.sqrt(rng.random() * (outer * outer - inner * inner) + inner * inner)
+        falloff = 1.0 - (r - inner) / (outer - inner)
+        if rng.random() > falloff:
+            continue
+        angle = rng.uniform(0.0, math.tau)
+        candidates.append((r * math.cos(angle), r * math.sin(angle), rng.uniform(1.0, 1.6), rng.uniform(0.0, math.tau)))
+    return candidates
 
 
 def build_props(placements: List[PropPlacement], collection=None):

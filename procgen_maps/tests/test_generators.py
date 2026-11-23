@@ -1,5 +1,6 @@
 """Pure-Python tests for noise, math helpers, terrain, city and dungeon generators."""
 import math
+import random
 
 import numpy as np
 import pytest
@@ -20,7 +21,7 @@ from procgen_maps.generators.city.parking import (
     plan_parking_lots_for_supermarkets,
     plan_parking_stalls,
 )
-from procgen_maps.generators.city.props import plan_props
+from procgen_maps.generators.city.props import plan_forest_ring, plan_props
 from procgen_maps.generators.city.setback import (
     rect_segment_distance,
     road_clearance,
@@ -34,7 +35,7 @@ from procgen_maps.generators.city.special_buildings import (
     SPECIAL_BUILDING_SPECS,
     plan_special_buildings,
 )
-from procgen_maps.generators.city.streets import StreetGraph, build_street_graph
+from procgen_maps.generators.city.streets import StreetGraph, build_street_graph, node_fan_radii, sidewalk_trim
 from procgen_maps.generators.city.zones import classify_zones
 from procgen_maps.generators.dungeon import (
     Corridor,
@@ -689,8 +690,23 @@ def test_shrink_footprint_for_setback_reaches_required_clearance():
     roads = [(-50.0, 10.0, 50.0, 10.0, 6.0)]
     hw, hh = shrink_footprint_for_setback((0.0, 0.0), (10.0, 10.0), roads, required=2.6)
     assert hh == pytest.approx(10.0 - 3.0 - 2.6)
-    assert hw == hh  # shrinks uniformly on both axes
+    assert hw == 10.0  # only the axis facing the road shrinks
     assert road_clearance((-hw, -hh, hw, hh), roads) >= 2.6 - 1e-9
+
+
+def test_shrink_footprint_for_setback_handles_roads_on_both_axes():
+    roads = [(-50.0, 10.0, 50.0, 10.0, 6.0), (12.0, -50.0, 12.0, 50.0, 4.0)]
+    hw, hh = shrink_footprint_for_setback((0.0, 0.0), (10.0, 10.0), roads, required=2.0)
+    assert hh == pytest.approx(10.0 - 3.0 - 2.0)
+    assert hw == pytest.approx(12.0 - 2.0 - 2.0)
+    assert road_clearance((-hw, -hh, hw, hh), roads) >= 2.0 - 1e-9
+
+
+def test_shrink_footprint_for_setback_stops_when_shrinking_cannot_help():
+    # A street through the block center: no shrink fixes it, and the
+    # footprint must not be ground down to the minimum for nothing.
+    roads = [(-50.0, 0.0, 50.0, 0.0, 6.0)]
+    assert shrink_footprint_for_setback((0.0, 0.0), (10.0, 8.0), roads) == (10.0, 8.0)
 
 
 def test_shrink_footprint_for_setback_leaves_clear_footprints_alone():
@@ -699,14 +715,158 @@ def test_shrink_footprint_for_setback_leaves_clear_footprints_alone():
 
 
 def test_shrink_footprint_for_setback_never_goes_below_minimum():
-    roads = [(-50.0, 0.0, 50.0, 0.0, 6.0)]  # street through the block center: unfixable
-    hw, hh = shrink_footprint_for_setback((0.0, 0.0), (10.0, 10.0), roads, min_half_size=3.0)
-    assert (hw, hh) == (3.0, 3.0)
+    roads = [(-50.0, 9.0, 50.0, 9.0, 6.0)]  # road edge at y=6: needs hh <= 3.4 for a 2.6 m setback
+    hw, hh = shrink_footprint_for_setback((0.0, 0.0), (10.0, 10.0), roads, required=2.6, min_half_size=3.5)
+    assert (hw, hh) == (10.0, 3.5)
 
 
 def test_roads_near_keeps_only_roads_within_reach():
     roads = [(0.0, 20.0, 100.0, 20.0, 6.0), (0.0, 500.0, 100.0, 500.0, 6.0)]
     assert roads_near((50.0, 0.0), (10.0, 10.0), roads, reach=30.0) == roads[:1]
+
+
+@pytest.mark.parametrize("preset_key", list(PRESETS))
+def test_plan_buildings_keeps_sidewalk_clearance_from_every_road(preset_key):
+    preset = PRESETS[preset_key]
+    city_layout = generate_layout(preset, seed=42)
+    zone_by_block = classify_zones(city_layout.blocks, preset, seed=42)
+    graph = build_street_graph(city_layout.streets)
+    roads = roads_from_graph(graph, preset)
+    special_plans, reserved = plan_special_buildings(city_layout.blocks, zone_by_block, preset, seed=42,
+                                                     street_graph=graph)
+    plans = plan_buildings([b for b in city_layout.blocks if b.id not in reserved], zone_by_block, preset,
+                           seed=42, street_graph=graph)
+    assert plans
+    required = 2.0 + 0.6
+    for plan in plans + special_plans:
+        xs = [p[0] for p in plan.footprint]
+        ys = [p[1] for p in plan.footprint]
+        rect = (min(xs), min(ys), max(xs), max(ys))
+        center = ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+        half = ((max(xs) - min(xs)) / 2, (max(ys) - min(ys)) / 2)
+        clearance = road_clearance(rect, roads_near(center, half, roads))
+        if clearance < required - 1e-6:
+            # Only acceptable when no further shrink could help (a street
+            # actually crossing the block, or an axis at its minimum).
+            unfixable = shrink_footprint_for_setback(center, half, roads_near(center, half, roads)) == half
+            assert unfixable, (preset_key, plan.block_id, clearance, half)
+
+
+
+@pytest.mark.parametrize("preset_key", ["METROPOLE", "INDUSTRIAL"])
+@pytest.mark.parametrize("seed", [1, 42])
+def test_raster_layout_street_graph_is_connected_with_real_intersections(preset_key, seed):
+    # Regression: the old Voronoi-spoke raster network had one isolated
+    # 2-node component per segment - no shared nodes at all - so raster
+    # cities never got intersections, crosswalks, stop signs or traffic lights.
+    preset = PRESETS[preset_key]
+    city_layout = generate_layout(preset, seed=seed)
+    graph = build_street_graph(city_layout.streets)
+    adjacency = {index: set() for index in range(len(graph.nodes))}
+    for a, b, _cls in graph.edges:
+        adjacency[a].add(b)
+        adjacency[b].add(a)
+    seen = {0}
+    stack = [0]
+    while stack:
+        node = stack.pop()
+        for neighbour in adjacency[node]:
+            if neighbour not in seen:
+                seen.add(neighbour)
+                stack.append(neighbour)
+    assert len(seen) == len(graph.nodes), "street graph must be one connected component"
+    assert sum(1 for degree in graph.node_degree.values() if degree >= 3) >= 10
+    assert any(cls == "arterial" for _a, _b, cls in graph.edges)
+    assert all(math.hypot(*block.center) <= preset.radius for block in city_layout.blocks)
+
+
+@pytest.mark.parametrize("preset_key", ["METROPOLE", "INDUSTRIAL"])
+def test_raster_layout_blocks_clear_every_street_by_construction(preset_key):
+    preset = PRESETS[preset_key]
+    city_layout = generate_layout(preset, seed=42)
+    roads = roads_from_graph(build_street_graph(city_layout.streets), preset)
+    # Raster streets are axis-aligned, so each road surface is exactly an
+    # axis-aligned rectangle (setback.py's capsule model would also count a
+    # road's rounded end cap, which the real flat-ended strip doesn't have).
+    road_rects = []
+    for ax, ay, bx, by, w in roads:
+        if abs(ax - bx) < 1e-9:   # vertical: pad across (x) only - the strip ends flat at its nodes
+            road_rects.append((ax - w / 2, min(ay, by), ax + w / 2, max(ay, by)))
+        else:
+            assert abs(ay - by) < 1e-9, "raster streets are axis-aligned"
+            road_rects.append((min(ax, bx), ay - w / 2, max(ax, bx), ay + w / 2))
+    sizes = set()
+    for block in city_layout.blocks:
+        cx, cy = block.center
+        hw, hh = block.half_size
+        for (rx0, ry0, rx1, ry1) in road_rects:
+            gap_x = max(rx0 - (cx + hw), (cx - hw) - rx1, 0.0)
+            gap_y = max(ry0 - (cy + hh), (cy - hh) - ry1, 0.0)
+            assert max(gap_x, gap_y) >= 2.0 + 0.6 - 1e-6 or (gap_x > 0 and gap_y > 0 and
+                                                             math.hypot(gap_x, gap_y) >= 2.0 + 0.6 - 1e-6)
+        sizes.add(round(block.area / 100.0))
+    assert len(sizes) >= 6, "merged lots and uneven spacing should give a real spread of block sizes"
+
+
+def test_node_fan_radii_use_each_nodes_own_widest_street():
+    preset = PRESETS["KLEINSTADT"]   # arterial 10 m, local 6 m
+    graph = StreetGraph(nodes=[(0.0, 0.0), (50.0, 0.0), (50.0, 50.0), (100.0, 50.0)],
+                        edges=[(0, 1, "local"), (1, 2, "local"), (2, 3, "arterial")],
+                        node_degree={0: 1, 1: 2, 2: 2, 3: 1})
+    radii = node_fan_radii(graph, preset)
+    assert radii == {0: 3.0, 1: 3.0, 2: 5.0, 3: 5.0}
+
+
+def test_sidewalk_trim_clears_crossing_streets_but_not_dead_ends():
+    assert sidewalk_trim(1, fan_radius=7.0) == 0.0
+    assert sidewalk_trim(2, fan_radius=7.0) == pytest.approx(7.0 + 2.0)
+    assert sidewalk_trim(4, fan_radius=5.0) == pytest.approx(5.0 + 2.0)
+
+
+def test_plan_forest_ring_stays_outside_city_and_thins_outward():
+    rng = random.Random(5)
+    trees = plan_forest_ring(200.0, rng)
+    assert 300 < len(trees) < 3500
+    radii = sorted(math.hypot(x, y) for x, y, _scale, _rot in trees)
+    assert radii[0] >= 200.0 * 1.06 - 1e-9
+    assert radii[-1] <= 200.0 * 1.9 + 1e-9
+    inner_half = sum(1 for r in radii if r < 200.0 * 1.48)
+    assert inner_half > len(radii) * 0.6   # denser near the city than far out
+    assert all(1.0 <= scale <= 1.6 for _x, _y, scale, _rot in trees)
+    assert plan_forest_ring(200.0, random.Random(5)) == trees   # deterministic
+
+
+def test_plan_props_without_city_radius_places_no_forest():
+    preset = PRESETS["DORF"]
+    city_layout = generate_layout(preset, seed=1)
+    zone_by_block = classify_zones(city_layout.blocks, preset, seed=1)
+    graph = build_street_graph(city_layout.streets)
+    without = plan_props(graph, city_layout.blocks, zone_by_block, preset, seed=1)
+    with_ring = plan_props(graph, city_layout.blocks, zone_by_block, preset, seed=1, city_radius=city_layout.radius)
+    assert len(with_ring) > len(without)
+    assert all(math.hypot(p.location[0], p.location[1]) < preset.radius * 1.06 + 50.0 for p in without)
+
+
+def test_plan_props_parked_cars_sit_on_the_road_not_the_grass():
+    preset = PRESETS["KLEINSTADT"]
+    city_layout = generate_layout(preset, seed=3)
+    zone_by_block = classify_zones(city_layout.blocks, preset, seed=3)
+    graph = build_street_graph(city_layout.streets)
+    cars = [p for p in plan_props(graph, city_layout.blocks, zone_by_block, preset, seed=3)
+            if p.asset_id == "parked_car"]
+    assert cars
+    half = preset.street_width_local / 2.0
+    for car in cars:
+        best = min(_point_segment_distance(car.location[0], car.location[1], *graph.nodes[a], *graph.nodes[b])
+                   for a, b, cls in graph.edges if cls == "local")
+        assert best < half, "car centerline must be inside the local road surface"
+
+
+def _point_segment_distance(px, py, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    l2 = dx * dx + dy * dy
+    t = 0.0 if l2 == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / l2))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
 
 
 def test_detail_rng_is_stable_across_processes_and_purposes():

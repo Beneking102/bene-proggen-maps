@@ -71,10 +71,20 @@ class BuildingPlan:
     tint: float = 0.5  # 0..1, per-building brightness variation (see materials/city_mat.py)
 
 
-def plan_buildings(blocks: List[Block], zone_by_block: Dict[int, str], preset, seed=None) -> List[BuildingPlan]:
-    """Decide which blocks get a building, how tall, and which facade type."""
+def plan_buildings(blocks: List[Block], zone_by_block: Dict[int, str], preset, seed=None,
+                   street_graph=None) -> List[BuildingPlan]:
+    """Decide which blocks get a building, how tall, and which facade type.
+
+    With `street_graph` (a streets.StreetGraph), every footprint is also
+    pulled back from the surrounding roads so a sidewalk plus a strip of
+    ground fits between the asphalt and the wall - see setback.py for why
+    the block-fraction shrink alone left most buildings standing in the
+    road."""
+    from . import setback
+
     rng = np.random.default_rng(preset.seed if seed is None else seed)
     plans: List[BuildingPlan] = []
+    roads = setback.roads_from_graph(street_graph, preset) if street_graph is not None else []
 
     for block in blocks:
         zone = zone_by_block.get(block.id, "residential")
@@ -103,6 +113,10 @@ def plan_buildings(blocks: List[Block], zone_by_block: Dict[int, str], preset, s
         cx, cy = block.center
         hw = block.half_size[0] * shrink
         hh = block.half_size[1] * shrink
+        if roads:
+            limit_w, limit_h = setback.shrink_footprint_for_setback(
+                block.center, block.half_size, setback.roads_near(block.center, block.half_size, roads))
+            hw, hh = min(hw, limit_w), min(hh, limit_h)
         footprint = [(cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)]
         tint = float(rng.random())
 
@@ -274,47 +288,103 @@ def _add_entrance(bm, face):
 _WINDOW_INSET_DEPTH = -0.12
 
 
+def _split_face_into_columns(face, columns: int):
+    """Split a vertical quad side face into `columns` equal vertical strips,
+    returned in order along the face's bottom edge.
+
+    Uses bmesh.utils.edge_split / face_split (plain BMesh API calls with no
+    operator overhead) rather than bmesh.ops.subdivide_edges, which this
+    used before: subdivide_edges(use_grid_fill=True) on just the two
+    horizontal edges of a quad does *not* grid-fill the quad (a face is
+    only filled when all of its edges are selected) - it inserted the
+    verts on the edges and returned, as "new faces", the neighbouring
+    faces that gained a vertex: the building's base face, the roof cap,
+    and the side face itself, unsplit. Downstream that meant one window
+    per ground-floor side, random nested insets on the roof tagged with
+    the window-glass material (every flat roof rendered as dark glass),
+    and ~70k single-face bmesh.ops calls per Metropole.
+
+    edge_split(edge, v, fac) places the new vert `fac` along from `v` and
+    returns (new_edge, new_vert) with `new_edge` the piece attached to
+    `v`; cutting from the far end inward keeps the `v`-side piece as the
+    edge to cut next. face_split(face, a, b) returns the half containing
+    the loop that starts at `a`... in practice the piece on the `v` side,
+    so the strips are collected and sorted geometrically to be safe."""
+    import bmesh
+
+    bottom, top = sorted(_horizontal_edges(face), key=lambda e: e.verts[0].co.z)
+    b0, b1 = bottom.verts
+    t0, t1 = top.verts
+    if (t0.co.xy - b0.co.xy).length > (t1.co.xy - b0.co.xy).length:
+        t0, t1 = t1, t0
+    direction = (b1.co - b0.co).normalized()
+    origin = b0.co.copy()
+
+    bottom_cuts = []
+    top_cuts = []
+    bottom_edge, top_edge = bottom, top
+    for k in range(columns - 1, 0, -1):
+        fac = k / (k + 1)
+        bottom_edge, vert = bmesh.utils.edge_split(bottom_edge, b0, fac)
+        bottom_cuts.append(vert)
+        top_edge, vert = bmesh.utils.edge_split(top_edge, t0, fac)
+        top_cuts.append(vert)
+
+    strips = [face]
+    current = face
+    for vb, vt in zip(bottom_cuts, top_cuts):
+        new_face, _loop = bmesh.utils.face_split(current, vb, vt)
+        strips.append(new_face)
+        # Continue with whichever half still contains b0 (the un-cut remainder).
+        current = new_face if b0 in new_face.verts else current
+    return sorted(strips, key=lambda f: (f.calc_center_median() - origin).dot(direction))
+
+
 def _plan_window_row(bm, face, facade: "FacadeType", rng: random.Random):
     """Split one floor's side face into window-pitch-wide columns and decide
     which columns get a recessed window (frequency-controlled, drawn from
-    the building's own `rng` - see window_mask). Returns [(column_face,
-    inset_thickness)] for the chosen columns; the actual inset is done by
-    _carve_floor_windows so a whole floor's windows go through as few
-    bmesh.ops calls as possible."""
-    import bmesh
-
+    the building's own `rng` - see window_mask). Returns the chosen column
+    faces; the actual inset is done by _carve_floor_windows so a whole
+    floor's windows go through as few bmesh.ops calls as possible."""
     horizontal = _horizontal_edges(face)
     if len(horizontal) != 2:
         return []
     face_width = horizontal[0].calc_length()
     columns = max(1, round(face_width / facade.width_pitch))
-
-    if columns > 1:
-        # bmesh.ops.subdivide_edges puts the newly created column faces in
-        # "geom" (all new geometry), not "geom_inner" (which is empty here -
-        # that key holds strictly-interior geometry with no boundary edges).
-        result = bmesh.ops.subdivide_edges(bm, edges=horizontal, cuts=columns - 1, use_grid_fill=True)
-        column_faces = [g for g in result["geom"] if isinstance(g, bmesh.types.BMFace)]
-    else:
-        column_faces = [face]
-
+    column_faces = _split_face_into_columns(face, columns) if columns > 1 else [face]
     return [column_face for column_face, has_window
             in zip(column_faces, window_mask(rng, len(column_faces), facade.window_frequency)) if has_window]
 
 
 def _carve_floor_windows(bm, side_faces, facade: "FacadeType", rng: random.Random):
-    """Window-carve every side face of one floor: one inset per window."""
+    """Window-carve every side face of one floor.
+
+    Every bmesh.ops call costs a fixed overhead proportional to the mesh's
+    current element count (operator slot setup + flag clearing), so one
+    inset_individual call *per window* was the single biggest cost in city
+    generation (~24 s of a 32 s Metropole build). inset_individual treats
+    each face independently, so all windows of a floor that share an inset
+    thickness (every column of one side has the same area) are carved in
+    one call. Batching across *floors* would change the result: the next
+    floor's column split adds a vertex to this floor's not-yet-inset faces'
+    top edges. The window rng is drawn face by face, in sorted face order,
+    before any inset happens."""
     import bmesh
 
+    pending = {}
     for face in side_faces:
         for column_face in _plan_window_row(bm, face, facade, rng):
             thickness = min(0.35, column_face.calc_area() ** 0.5 * 0.25)
-            # inset_individual keeps `column_face` itself as the recessed
-            # inner pane (only the new surrounding frame faces come back in
-            # result["faces"]) - tag that surviving reference as glass so
-            # the window reads as a distinct material, not just a depth cue.
-            bmesh.ops.inset_individual(bm, faces=[column_face], thickness=thickness, depth=_WINDOW_INSET_DEPTH)
-            column_face.material_index = 1
+            pending.setdefault(round(thickness, 6), []).append(column_face)
+
+    for thickness, faces in pending.items():
+        # inset_individual keeps each input face itself as the recessed
+        # inner pane (only the new surrounding frame faces come back in
+        # result["faces"]) - tag those surviving references as glass so
+        # the window reads as a distinct material, not just a depth cue.
+        bmesh.ops.inset_individual(bm, faces=faces, thickness=thickness, depth=_WINDOW_INSET_DEPTH)
+        for face in faces:
+            face.material_index = 1
 
 
 def _build_gable_roof(bm, top_face, footprint):

@@ -4,12 +4,12 @@ Two modes selected by `CityPreset.layout_mode`:
 
 - 'grid': a regular lattice of rectangular blocks with light jitter
   (Kleinstadt, Dorf presets - regular, orderly towns).
-- 'raster': seed points scattered and partitioned via a numpy-vectorized
-  nearest-seed raster scan (Voronoi-like; no scipy dependency - see
-  ARCHITECTURE.md). Each block's footprint is approximated as an
-  axis-aligned rectangle around its assigned cells' bounding extent rather
-  than an exact cell polygon; this keeps buildings.py's per-block extrusion
-  simple while still producing organically varied block sizes.
+- 'raster': an irregular street grid - uneven line spacing in both
+  directions, clipped to a circle, with a share of neighbouring lots merged
+  into larger blocks (Metropole, Industrial presets - varied block sizes
+  on a street network that is guaranteed connected; see
+  _generate_raster_layout for why the earlier Voronoi-like spoke network
+  was replaced).
 
 Pure Python/numpy only - no bpy here. generators/city/streets.py and
 buildings.py turn this data into meshes.
@@ -22,7 +22,9 @@ import numpy as np
 
 _FILL_FACTOR = 0.78       # fraction of available extent actually built on; remainder is street gap
 _ARTERIAL_EVERY_N = 3     # every Nth grid line / every Nth block is an arterial street
-_MIN_BLOCK_HALF_SIZE = 2.0  # meters; raster blocks shrunk smaller than this by overlap resolution are dropped
+_MIN_BLOCK_HALF_SIZE = 2.0  # meters; raster lots left smaller than this after street insets are dropped
+_IRREGULAR_STEP_RANGE = (0.7, 1.45)  # raster mode: successive street spacings, as multiples of block_size
+_MERGE_CHANCE = 0.22                 # raster mode: chance a lot merges with its right (or else upper) neighbour
 
 
 @dataclass
@@ -116,136 +118,107 @@ def _grid_street_segments(n, half_extent, preset) -> List[StreetSegment]:
 
 
 def _generate_raster_layout(preset, seed) -> CityLayout:
+    """'raster' mode: an irregular street grid (uneven spacing both ways)
+    clipped to a circle, with a share of neighbouring lots merged into
+    larger blocks - the organic big/small block mix the old Voronoi-like
+    raster partition aimed for, on top of a street network that is
+    actually connected.
+
+    The previous implementation turned the nearest-seed raster into
+    straight "spoke" segments between adjacent blocks' rectangle edges.
+    Measured over several seeds, every one of those ~800 Metropole
+    segments ended at its own unique pair of points: the street graph had
+    one two-node component per segment, so a raster city had zero
+    intersections (no fans, crosswalks, stop signs or traffic lights),
+    roads that stopped in mid-air, and ~3% of segments cutting straight
+    through a third block's building. Grid lines fix all of that by
+    construction: every crossing is a shared node, and blocks are inset
+    from each line by that street's half width plus the sidewalk, so no
+    road ever touches a building."""
+    from .setback import SETBACK_MARGIN, SIDEWALK_WIDTH
+
     rng = np.random.default_rng(seed)
     radius = preset.radius
-    n_seeds = max(4, int((3.14159 * radius * radius) / (preset.block_size ** 2)))
-    seed_points = rng.uniform(-radius, radius, size=(n_seeds, 2))
+    xs = _irregular_lines(rng, radius, preset.block_size)
+    ys = _irregular_lines(rng, radius, preset.block_size)
+    n_x, n_y = len(xs) - 1, len(ys) - 1
 
-    cell_size = preset.block_size / 4.0
-    grid_n = max(8, int((radius * 2) / cell_size))
-    coords = np.linspace(-radius, radius, grid_n)
-    gx, gy = np.meshgrid(coords, coords)
-    flat_gx = gx.ravel()
-    flat_gy = gy.ravel()
+    def line_class(index):
+        return "arterial" if index % _ARTERIAL_EVERY_N == 0 else "local"
 
-    dx = flat_gx[:, None] - seed_points[None, :, 0]
-    dy = flat_gy[:, None] - seed_points[None, :, 1]
-    nearest_flat = np.argmin(dx * dx + dy * dy, axis=1)
-    nearest = nearest_flat.reshape(grid_n, grid_n)
+    def line_inset(index):
+        width = preset.street_width_arterial if line_class(index) == "arterial" else preset.street_width_local
+        return width / 2.0 + SIDEWALK_WIDTH + SETBACK_MARGIN
+
+    kept = set()
+    for i in range(n_x):
+        for j in range(n_y):
+            cx = (xs[i] + xs[i + 1]) / 2.0
+            cy = (ys[j] + ys[j + 1]) / 2.0
+            if math.hypot(cx, cy) <= radius:
+                kept.add((i, j))
+
+    # Merge some lots with a kept, still-free right-hand or upper neighbour.
+    owner = {}
+    groups: List[List[Tuple[int, int]]] = []
+    for j in range(n_y):
+        for i in range(n_x):
+            if (i, j) not in kept or (i, j) in owner:
+                continue
+            cells = [(i, j)]
+            roll = rng.random()
+            if roll < _MERGE_CHANCE and (i + 1, j) in kept and (i + 1, j) not in owner:
+                cells.append((i + 1, j))
+            elif roll < 2 * _MERGE_CHANCE and (i, j + 1) in kept and (i, j + 1) not in owner:
+                cells.append((i, j + 1))
+            for cell in cells:
+                owner[cell] = len(groups)
+            groups.append(cells)
 
     blocks: List[Block] = []
-    for seed_index in range(n_seeds):
-        mask = nearest_flat == seed_index
-        if not np.any(mask):
+    for group in groups:
+        i_lo = min(i for i, _ in group)
+        i_hi = max(i for i, _ in group) + 1
+        j_lo = min(j for _, j in group)
+        j_hi = max(j for _, j in group) + 1
+        x0, x1 = xs[i_lo] + line_inset(i_lo), xs[i_hi] - line_inset(i_hi)
+        y0, y1 = ys[j_lo] + line_inset(j_lo), ys[j_hi] - line_inset(j_hi)
+        hw, hh = (x1 - x0) / 2.0, (y1 - y0) / 2.0
+        if hw < _MIN_BLOCK_HALF_SIZE or hh < _MIN_BLOCK_HALF_SIZE:
             continue
-        cell_xs = flat_gx[mask]
-        cell_ys = flat_gy[mask]
-        min_x, max_x = cell_xs.min(), cell_xs.max()
-        min_y, max_y = cell_ys.min(), cell_ys.max()
-        hw = ((max_x - min_x) / 2.0) * _FILL_FACTOR
-        hh = ((max_y - min_y) / 2.0) * _FILL_FACTOR
-        if hw <= 0.5 or hh <= 0.5:
-            continue
-        blocks.append(Block(id=seed_index, center=((min_x + max_x) / 2.0, (min_y + max_y) / 2.0),
-                             half_size=(hw, hh)))
+        blocks.append(Block(id=len(blocks), center=((x0 + x1) / 2.0, (y0 + y1) / 2.0), half_size=(hw, hh)))
 
-    _resolve_block_overlaps(blocks)
-    # A block that needed heavy shrinking to resolve an overlap (see above)
-    # can end up as a sliver too small to read as a real building lot -
-    # drop it, same as the original too-small-to-bother check above.
-    blocks = [b for b in blocks if min(b.half_size) >= _MIN_BLOCK_HALF_SIZE]
+    streets: List[StreetSegment] = []
 
-    streets = _raster_street_segments(nearest, blocks, preset)
+    def wanted(cell_a, cell_b):
+        """A grid-line piece exists where at least one side is a kept lot,
+        and is removed where both sides belong to one merged block."""
+        in_a, in_b = cell_a in owner, cell_b in owner
+        if not (in_a or in_b):
+            return False
+        return not (in_a and in_b and owner[cell_a] == owner[cell_b])
+
+    for i in range(n_x + 1):
+        for j in range(n_y):
+            if wanted((i - 1, j), (i, j)):
+                streets.append(StreetSegment(len(streets), (xs[i], ys[j]), (xs[i], ys[j + 1]), line_class(i)))
+    for j in range(n_y + 1):
+        for i in range(n_x):
+            if wanted((i, j - 1), (i, j)):
+                streets.append(StreetSegment(len(streets), (xs[i], ys[j]), (xs[i + 1], ys[j]), line_class(j)))
+
     return CityLayout(blocks=blocks, streets=streets, radius=radius)
 
 
-def _resolve_block_overlaps(blocks: List[Block], passes: int = 6, margin: float = 0.1) -> None:
-    """Shrink any pair of blocks whose rectangles still overlap, in place.
-
-    A raster-mode block's rectangle is the axis-aligned bounding box of every
-    grid cell nearest to its seed (see above), shrunk by _FILL_FACTOR - but
-    for non-convex or irregularly-shaped Voronoi-like cells (routine for
-    scattered seeds), that bounding box can still extend into a
-    neighboring seed's actual territory even after the shrink, so two
-    blocks can end up overlapping. Rather than trying to reconstruct the
-    true (possibly concave) cell polygon just to get a tighter initial
-    estimate, this resolves the *invariant* directly: for every pair that
-    still overlaps, shrink both along whichever axis has the smaller
-    overlap (the axis where a fix costs the least width) until their
-    projections on that axis no longer intersect - which, by the AABB
-    separating-axis test, guarantees the rectangles no longer overlap
-    regardless of the other axis. A few passes handle chains of blocks
-    that all touch each other settling into a mutually non-overlapping
-    arrangement."""
-    for _ in range(passes):
-        changed = False
-        for i in range(len(blocks)):
-            a = blocks[i]
-            for j in range(i + 1, len(blocks)):
-                b = blocks[j]
-                overlap_x = (a.half_size[0] + b.half_size[0]) - abs(a.center[0] - b.center[0])
-                overlap_y = (a.half_size[1] + b.half_size[1]) - abs(a.center[1] - b.center[1])
-                if overlap_x <= 0 or overlap_y <= 0:
-                    continue
-                changed = True
-                if overlap_x < overlap_y:
-                    shrink = overlap_x / 2.0 + margin
-                    a.half_size = (max(0.5, a.half_size[0] - shrink), a.half_size[1])
-                    b.half_size = (max(0.5, b.half_size[0] - shrink), b.half_size[1])
-                else:
-                    shrink = overlap_y / 2.0 + margin
-                    a.half_size = (a.half_size[0], max(0.5, a.half_size[1] - shrink))
-                    b.half_size = (b.half_size[0], max(0.5, b.half_size[1] - shrink))
-        if not changed:
-            return
-
-
-def _rect_exit_point(center, half_size, direction):
-    """Point where a ray from `center` (in a normalized `direction`) exits the
-    axis-aligned rectangle described by `half_size`."""
-    cx, cy = center
-    hw, hh = half_size
-    dx, dy = direction
-    candidates = []
-    if abs(dx) > 1e-9:
-        candidates.append(hw / abs(dx))
-    if abs(dy) > 1e-9:
-        candidates.append(hh / abs(dy))
-    t = min(candidates) if candidates else 0.0
-    return (cx + dx * t, cy + dy * t)
-
-
-def _raster_street_segments(nearest, blocks: List[Block], preset) -> List[StreetSegment]:
-    """Derive street segments from the true seed-adjacency of the raster
-    partition (which cells of different seeds touch each other) - unlike
-    independently expanding each block's own perimeter, this reuses the
-    partition's actual neighbor relationships, so the resulting network is
-    guaranteed connected rather than a set of isolated rectangles. Each
-    segment is clipped to the gap between the two blocks' rectangle
-    boundaries (not their centers), so streets run between buildings rather
-    than through them."""
-    kept_ids = {block.id for block in blocks}
-    block_by_id = {block.id: block for block in blocks}
-
-    adjacency = set()
-    for left, right in ((nearest[:, :-1], nearest[:, 1:]), (nearest[:-1, :], nearest[1:, :])):
-        differing = left != right
-        for a_raw, b_raw in zip(left[differing], right[differing]):
-            a, b = int(a_raw), int(b_raw)
-            if a in kept_ids and b in kept_ids:
-                adjacency.add((min(a, b), max(a, b)))
-
-    streets: List[StreetSegment] = []
-    for seg_id, (a, b) in enumerate(sorted(adjacency)):
-        block_a, block_b = block_by_id[a], block_by_id[b]
-        dx = block_b.center[0] - block_a.center[0]
-        dy = block_b.center[1] - block_a.center[1]
-        length = math.hypot(dx, dy)
-        if length < 1e-6:
-            continue
-        direction = (dx / length, dy / length)
-        start = _rect_exit_point(block_a.center, block_a.half_size, direction)
-        end = _rect_exit_point(block_b.center, block_b.half_size, (-direction[0], -direction[1]))
-        street_class = "arterial" if seg_id % _ARTERIAL_EVERY_N == 0 else "local"
-        streets.append(StreetSegment(seg_id, start, end, street_class))
-    return streets
+def _irregular_lines(rng, radius: float, block_size: float) -> List[float]:
+    """Street-line positions from -radius to just past +radius with
+    uneven spacing (_IRREGULAR_STEP_RANGE x block_size), so blocks come in
+    visibly different sizes instead of a uniform lattice."""
+    # Positions are rounded to streets.py's 0.5 m node-snap grid so the
+    # street graph's nodes land exactly on the lines the blocks were inset
+    # from (otherwise snapping could move a road up to 0.25 m into a lot).
+    lines = [-radius]
+    while lines[-1] < radius:
+        step = block_size * float(rng.uniform(*_IRREGULAR_STEP_RANGE))
+        lines.append(round((lines[-1] + step) * 2.0) / 2.0)
+    return lines
