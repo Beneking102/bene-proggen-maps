@@ -137,17 +137,19 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
             x, y = start[0] + dx * along - nx * offset, start[1] + dy * along - ny * offset
             try_place(rng.choice(tree_ids), x, y, rotation_z=rng.uniform(0, math.tau), scale=rng.uniform(0.85, 1.15))
 
-        if preset.cars_enabled and street_class == "local" and length >= _CAR_SPACING:
+        if preset.cars_enabled and street_class == "local" and usable >= _CAR_SPACING:
             # Parked *on* the road, in the kerbside lane - previously the
-            # cars were offset 1.2 m *outside* the asphalt, i.e. on the grass.
+            # cars were offset 1.2 m *outside* the asphalt, i.e. on the grass
+            # - and, like the lamps, only along the trimmed range so no car
+            # sits in the intersection fan or on the zebra crossing.
             car_offset = preset.street_width_local / 2.0 - _CAR_LANE_INSET
-            n_cars = int(length / _CAR_SPACING)
+            n_cars = int(usable / _CAR_SPACING)
             for i in range(n_cars):
                 if rng.random() > density:
                     continue
-                t = (i + 0.5) / max(n_cars, 1)
-                x = start[0] + dx * length * t + nx * car_offset
-                y = start[1] + dy * length * t + ny * car_offset
+                along = trim_a + usable * (i + 0.5) / max(n_cars, 1)
+                x = start[0] + dx * along + nx * car_offset
+                y = start[1] + dy * along + ny * car_offset
                 try_place("parked_car", x, y, rotation_z=math.atan2(dy, dx))
 
     for block in blocks:

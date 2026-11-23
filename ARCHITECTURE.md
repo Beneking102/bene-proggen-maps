@@ -105,7 +105,9 @@ turns it into the `ProcgenMaps_Terrain` object via a single
 per-point, so other generators can query terrain height without needing
 the mesh to exist yet or ray-casting against it.
 
-**City** (`generators/city/__init__.py`'s `generate_city`) runs a fixed
+**City** (`generators/city/__init__.py`) is split into `plan_city` - every
+pure planning stage, returning a `CityPlan` dataclass with no bpy anywhere
+- and `generate_city`, which calls it and then builds the meshes. The
 pipeline, each stage consuming the previous stage's plain-data output:
 
 ```
@@ -147,6 +149,17 @@ UV maps and `procgen_maps_road_*` properties), `terrain_mat.py`,
 through `atmosphere.py`'s single `ProcgenMaps_AerialPerspective` node
 group, so the Lighting panel's haze slider and sun presets retune the
 whole scene by editing two nodes.
+
+**Validation** (`validation.py`) follows the same split:
+`validate_city_plan(plan, preset)` checks a `CityPlan` for overlaps
+(building/building, building/road, prop/building, prop/road, prop/prop,
+sign/building, sign/road, parking/road, parking/building), disconnected
+street components and degenerate edges - pure Python, run by
+`tests/test_validation.py` over many seeds and every preset.
+`validate_scene` adds the bpy-only checks (object z against
+`sample_world_height`, orphan datablocks). `ui/operators.py`'s
+`PROCGEN_OT_validate_map` runs both and writes the summary to
+`settings.validation_summary`.
 
 **Dungeon** (`generators/dungeon.py`, wired from
 `PROCGEN_OT_generate_dungeon`) is a fully independent path: BSP-partition
@@ -224,6 +237,9 @@ read back with `obj.get("key")`):
   `plan_buildings`, `plan_props`, `SpatialHashGrid`, `pack_rects`,
   `build_svg_document`, preset lookups, and so on) - runs in any Python
   3.11 virtualenv with `numpy`/`pytest` installed, no Blender required.
+  `test_validation.py` is the fuzz layer: `plan_city` + `validate_city_plan`
+  over every preset and a dozen seeds (0 and 2^31-1 included), plus
+  determinism and the regression tests behind each validator rule.
 - `procgen_maps/tests/blender_integration/run_smoke_tests.py`: a separate
   headless-Blender script that exercises the bpy-dependent "build" half
   (mesh building, material node setup, collection linking, the exporters)

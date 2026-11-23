@@ -95,9 +95,12 @@ def test_street_props_keep_clear_of_the_crossing_street():
     placements = plan_props(graph, [], {}, preset, seed=1)
     half_arterial = preset.street_width_arterial / 2.0
     half_local = preset.street_width_local / 2.0
+    fan_clear = preset.street_width_arterial / 2.0 + SIDEWALK_WIDTH
     for placement in placements:
         x, y, _z = placement.location
         if placement.asset_id == "parked_car":
+            # Cars park on the road by design, but never in the crossing/crosswalk zone.
+            assert math.hypot(x, y) > fan_clear, placement
             continue
         # Off both roads' asphalt: the horizontal arterial (|y| <= 7) and the vertical local (|x| <= 3.5).
         assert abs(y) > half_arterial + 0.01 or abs(x) > half_axis_clear(half_arterial), placement

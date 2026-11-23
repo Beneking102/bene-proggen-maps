@@ -6,7 +6,75 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.10.0 — CI fixed, 3.4x faster Metropole, and a city that finally looks like one (current)
+## v0.11.0 — Correctness audit: nothing on the asphalt, nothing left behind (current)
+
+A robustness release, not a visual one: the goal was a generator whose
+output is provably clean for any preset and seed, and the tooling to keep
+it that way. The new pure-Python validator (`procgen_maps/validation.py`)
+checks a planned city for buildings overlapping each other or the road
+surface, props and signs standing inside a building or on the asphalt,
+props overlapping, parking lots across a road, and a street graph that is
+not one connected network; inside Blender it adds floating/buried objects
+against the terrain and orphan datablocks. A new **Validate Map** button
+runs it on the current scene. The planning half of `generate_city` is now
+its own function (`plan_city`), so the fuzz test runs the full pipeline
+over 50 seeds x 4 presets without Blender.
+
+**What the audit found (12 seeds x 4 presets, 84k props, 23k signs,
+3.6k buildings):** 12,057 props on the asphalt, 479 prop pairs
+overlapping, 139 signs on the asphalt, 41 parking lots running into the
+road. Buildings, street connectivity and determinism were already clean.
+Causes, each now fixed with a regression test:
+
+- Street lamps and trees were placed from `t = 0` to `t = 1` along every
+  edge - including both end nodes - so a lamp stood in the middle of every
+  crossing street (270-350 per city). They now start past the crossing
+  street's half width plus sidewalk, the same trim the sidewalk itself
+  uses.
+- Traffic lights were offset sideways from the node only, which walks
+  along the crossing arterial's centerline: every signaled intersection
+  had a pole in the middle of the road. They now stand on the corner.
+- The collision grid checked a tree's unscaled footprint while forest
+  trees are scaled up to 1.6x, so big trees overlapped.
+- Park trees and shop signs were scattered over the raw block rectangle,
+  which on grid presets overlaps the arterials by up to 1.7 m; they now
+  use the same road-setback solver as the buildings. Forest-ring trees
+  avoid the street stubs that run out past the city circle.
+- Supermarket parking lots ran to the block's front edge - asphalt on
+  asphalt; the lot is pulled back a sidewalk's width from the road, and
+  street props keep out of the lot.
+- Parked cars were spaced over the whole edge, so the first one sat in
+  the intersection fan / zebra crossing; they use the same trimmed range.
+- Intersection fans were exactly coplanar with the road strips they
+  cover (z-fighting); they sit 1 cm higher now.
+
+**After: 0 issues over 50 seeds x 4 presets (354k props, 105k signs, 15k
+buildings), every plan bit-identical when re-planned.**
+
+**Scene-side (headless Blender, all 4 presets, terrain + city + dungeon
+regenerated three times with changing seeds):** no datablock growth and
+no orphans - but regenerating only the city on an existing terrain left
+the previous city's flattened building pads *and the previous seed's
+heights* in the terrain mesh: 255k-704k of the terrain's vertices
+disagreed with a fresh terrain + city. The terrain is now reset to the
+heightmap before the new pads are flattened in (0 stale vertices), and
+the smoke test pins it along with "regenerate twice does not grow any
+datablock" and "no `PROCGEN_*` class survives unregister". Edge seeds
+(0, 2^31-1), a city without terrain and terrain without a city are
+covered by tests as well.
+
+**Before/after - Kleinstadt, seed 4, the same arterial/local crossing (v0.10.0 left, v0.11.0 right): the lamp in the middle of the arterial, the tree in the crosswalk and the car parked across the junction are gone - sidewalk props and kerbside cars start past the corner, the traffic light stands on it:**
+![Intersection before and after](docs/progression/v0.11.0-intersection-before-after.png)
+
+**Metropole, seed 12, low angle - the forest ring now stops at the rim streets instead of growing on them:**
+![Metropole low angle](docs/progression/v0.11.0-metropole-low.png)
+
+**Industrial, seed 3 - overview; Validate Map reports "OK - no issues" for it:**
+![Industrial overview](docs/progression/v0.11.0-industrial-overview.png)
+
+---
+
+## v0.10.0 — CI fixed, 3.4x faster Metropole, and a city that finally looks like one
 
 Three goals for this round, in order: make CI green, make generation
 faster, make the renders clearly better than v0.9.0 - and the three turned

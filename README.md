@@ -70,6 +70,12 @@ and exports them to common interchange formats. Targets Blender 4.2+
   works identically in the editor, headless and on CI.
 - **Generate All / Randomize Seed**: one button for terrain + city, and a
   dice button next to the seed field.
+- **Validate Map**: one click checks the generated map for overlaps
+  (buildings, roads, props, signs, parking lots), disconnected streets,
+  floating or buried objects and orphan datablocks, and shows the summary
+  in the panel (full report in the system console). The same validator
+  runs in the test suite over 50 seeds x 4 presets
+  (`procgen_maps/validation.py`).
 - **Dungeon halls**: large BSP rooms get pillar grids, the boss room a
   central dais, and the stone materials noise grain and bump.
 - **Export** to glTF/GLB, FBX, USDZ, a top-down SVG map, and a JSON stats
@@ -105,6 +111,9 @@ details.
    lights.
 5. Open the **Export** sub-panel to write glTF, FBX, USDZ, SVG, or JSON
    output to the configured export directory.
+6. **Validate Map** checks the result for placement problems; regenerating
+   the city on an existing terrain is safe (the terrain is re-leveled
+   before the new buildings' pads are flattened in).
 
 ## Contributing
 
@@ -112,7 +121,8 @@ See `ARCHITECTURE.md` for the module layout, registration pattern, and the
 pure-Python/bpy split convention every generator follows - read it before
 sending a pull request. `DEPLOYMENT.md` and `OPTIMIZATION.md` cover running
 headless and performance tuning, respectively. `PROGRESSION.md` tracks the
-project's visual history with screenshots/renders per version.
+project's visual history with screenshots/renders per version, and
+`ROADMAP.md` what the next releases are about.
 
 ## License
 
