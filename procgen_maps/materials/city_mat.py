@@ -496,7 +496,9 @@ def get_or_create_window_material():
 
 def get_or_create_trim_material():
     """Mesh slot 3 on every building: balcony railings, rooftop gear and
-    other dark metal trim - one flat, slightly metallic grey shared by all."""
+    other metal trim - one flat, light, slightly metallic grey shared by
+    all (v0.13's near-black read as a solid dark band on every balcony,
+    especially at night)."""
     import bpy
 
     from . import atmosphere
@@ -505,7 +507,7 @@ def get_or_create_trim_material():
     if existing is not None:
         return existing
     mat = bpy.data.materials.new(TRIM_MATERIAL_NAME)
-    mat.diffuse_color = (0.18, 0.18, 0.2, 1.0)
+    mat.diffuse_color = (0.62, 0.63, 0.66, 1.0)
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
@@ -513,9 +515,9 @@ def get_or_create_trim_material():
     output = nodes.new("ShaderNodeOutputMaterial")
     output.location = (300, 0)
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.inputs["Base Color"].default_value = (0.16, 0.16, 0.18, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.45
-    bsdf.inputs["Metallic"].default_value = 0.6
+    bsdf.inputs["Base Color"].default_value = (0.58, 0.59, 0.62, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.4
+    bsdf.inputs["Metallic"].default_value = 0.35
     links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
     atmosphere.apply_haze(mat)
     return mat

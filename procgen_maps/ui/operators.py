@@ -371,7 +371,8 @@ class PROCGEN_OT_generate_dungeon(bpy.types.Operator):
         from ..generators import dungeon as dungeon_gen
 
         settings = context.scene.procgen_maps
-        params = dungeon_gen.DungeonParams(seed=settings.seed)
+        params = dungeon_gen.DungeonParams(seed=settings.seed, theme=settings.dungeon_theme,
+                                           levels=settings.dungeon_levels)
 
         profiler = Profiler()
         dungeon_gen.clear_dungeon()
@@ -380,7 +381,8 @@ class PROCGEN_OT_generate_dungeon(bpy.types.Operator):
             objects = dungeon_gen.build_dungeon_mesh(layout, _root_collection())
         _write_stats(context.scene, profiler, objects)
         _switch_viewport_to_material_preview(context)
-        self.report({'INFO'}, f"Dungeon generated: {len(layout.rooms)} rooms")
+        self.report({'INFO'}, f"Dungeon generated: {len(layout.rooms)} rooms on {layout.levels} level(s), "
+                               f"{len(layout.stairs)} staircase(s), theme {layout.theme}")
         return {'FINISHED'}
 
 
@@ -412,14 +414,20 @@ class PROCGEN_OT_randomize_seed(bpy.types.Operator):
 class PROCGEN_OT_export_gltf(bpy.types.Operator):
     bl_idname = "procgen_maps.export_gltf"
     bl_label = "Export glTF"
-    bl_description = "Export the generated ProcgenMaps collection to a .glb file"
+    bl_description = ("Export the generated map to a game-ready .glb: City/Terrain/Dungeon hierarchy, "
+                      "collision meshes, LODs and a walkable ground mesh per the Export panel's options")
     bl_options = {'REGISTER'}
 
     def execute(self, context):
-        from ..exporters import gltf_export
+        from ..exporters import game_export
+        settings = context.scene.procgen_maps
         filepath = _resolve_export_path(context, "procgen_maps.glb")
-        gltf_export.export_gltf(filepath)
-        self.report({'INFO'}, f"Exported glTF to {filepath}")
+        options = game_export.GameExportOptions(
+            collision=settings.export_collision, naming=settings.export_naming,
+            lods=settings.export_lods, walkable=settings.export_walkable)
+        summary = game_export.export_game_gltf(filepath, options)
+        self.report({'INFO'}, f"Exported glTF to {filepath} ({summary['collision']} colliders, "
+                               f"{summary['lods']} LOD groups, {summary['walkable']} walkable meshes)")
         return {'FINISHED'}
 
 

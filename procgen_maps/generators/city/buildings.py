@@ -457,11 +457,16 @@ def _add_balconies(bm, plan: BuildingPlan, base_z: float, rng: random.Random):
             y_out = wall_y + side * _BALCONY_DEPTH
             y_lo, y_hi = (y_out, wall_y) if side < 0 else (wall_y, y_out)
             _add_box(bm, x0, x1, y_lo, y_hi, z - _BALCONY_SLAB, z, WALL_SLOT)
-            rail_lo, rail_hi = (y_out, y_out + 0.08) if side < 0 else (y_out - 0.08, y_out)
-            _add_box(bm, x0, x1, rail_lo, rail_hi, z, z + _BALCONY_RAIL_HEIGHT, TRIM_SLOT)
+            # A light, slim railing: a thin panel to two thirds of the
+            # height plus a top rail (v0.13's full-height dark box read as
+            # a black band across the facade at night).
+            rail_lo, rail_hi = (y_out, y_out + 0.05) if side < 0 else (y_out - 0.05, y_out)
+            _add_box(bm, x0, x1, rail_lo, rail_hi, z, z + _BALCONY_RAIL_HEIGHT * 0.66, TRIM_SLOT)
+            _add_box(bm, x0, x1, rail_lo - 0.02, rail_hi + 0.02, z + _BALCONY_RAIL_HEIGHT - 0.06,
+                     z + _BALCONY_RAIL_HEIGHT, TRIM_SLOT)
             # Short side rails close the ribbon's ends.
-            for ex0, ex1 in ((x0, x0 + 0.08), (x1 - 0.08, x1)):
-                _add_box(bm, ex0, ex1, y_lo, y_hi, z, z + _BALCONY_RAIL_HEIGHT, TRIM_SLOT)
+            for ex0, ex1 in ((x0, x0 + 0.05), (x1 - 0.05, x1)):
+                _add_box(bm, ex0, ex1, y_lo, y_hi, z, z + _BALCONY_RAIL_HEIGHT * 0.66, TRIM_SLOT)
 
 
 def _add_shopfront(bm, plan: BuildingPlan, base_z: float, rng: random.Random):

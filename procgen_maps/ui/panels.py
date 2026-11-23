@@ -35,6 +35,9 @@ class PROCGEN_PT_main_panel(bpy.types.Panel):
         col.operator("procgen_maps.generate_terrain")
         col.operator("procgen_maps.generate_city")
         col.operator("procgen_maps.generate_dungeon")
+        row = col.row(align=True)
+        row.prop(settings, "dungeon_theme", text="")
+        row.prop(settings, "dungeon_levels", text="Levels")
 
         layout.separator()
         layout.prop(settings, "night_mode", toggle=True)
@@ -58,6 +61,13 @@ class PROCGEN_PT_export_panel(bpy.types.Panel):
         layout = self.layout
         settings = context.scene.procgen_maps
         layout.prop(settings, "export_directory")
+        box = layout.box()
+        box.label(text="Game Engine (glTF)", icon='MESH_CUBE')
+        box.prop(settings, "export_naming")
+        row = box.row(align=True)
+        row.prop(settings, "export_collision", toggle=True)
+        row.prop(settings, "export_lods", toggle=True)
+        box.prop(settings, "export_walkable", toggle=True)
         col = layout.column(align=True)
         col.operator("procgen_maps.export_gltf")
         col.operator("procgen_maps.export_fbx")

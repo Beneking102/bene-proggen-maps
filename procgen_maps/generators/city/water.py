@@ -30,6 +30,14 @@ WATER_DROP = 1.2           # meters the water surface sits below the heightfield
 _WATER_CHUNK = 6.0         # meters between water-strip rings
 _RAILING_HEIGHT = 1.1
 _DECK_THICKNESS = 0.7
+_PARAPET_HEIGHT = 0.35     # the low solid kerb the railing posts stand on
+_PARAPET_THICKNESS = 0.2
+_POST_SPACING = 2.0
+_POST_SIZE = 0.08
+_RAIL_SIZE = 0.07
+_FASCIA_OVERHANG = 0.15    # the deck-edge band sticks out past the sidewalk
+_FASCIA_DROP = 0.3         # ... and hangs below the deck slab
+_ARCH_DEPTH = 1.6          # how far the arched soffit dips at the springing
 
 
 def bridge_edges(graph: StreetGraph, river: RiverSpec) -> List[int]:
@@ -110,6 +118,36 @@ def build_bridges(graph: StreetGraph, river: RiverSpec, preset, terrain_params, 
             faces.append(tuple(base + i for i in quad))
             material_index.append(material)
 
+    def arch(x_lo, x_hi, y0, y1, top, depth, segments=8):
+        """A segmented arch hanging under the deck between x_lo and x_hi:
+        the soffit dips `depth` below the deck at the ends (the springing
+        on the pier / bank) and meets the deck in the middle. Built as a
+        ring of quads (the curved underside) plus two flat end caps, so
+        the deck reads as an arched bridge from the river side."""
+        base = len(verts)
+        profile = []
+        for k in range(segments + 1):
+            t = k / segments
+            z = top - depth * (1.0 - math.sin(math.pi * t)) ** 0.8
+            profile.append((x_lo + (x_hi - x_lo) * t, z))
+        for (x, z) in profile:
+            verts.append((x, y0, z))
+            verts.append((x, y1, z))
+        for k in range(segments):
+            i = base + 2 * k
+            faces.append((i, i + 1, i + 3, i + 2))
+            material_index.append(0)
+        # Spandrel faces on both sides, from the arch's profile up to the deck.
+        for y_side in (y0, y1):
+            side_base = len(verts)
+            for (x, z) in profile:
+                verts.append((x, y_side, z))
+            verts.append((x_hi, y_side, top))
+            verts.append((x_lo, y_side, top))
+            ring = list(range(side_base, side_base + len(profile)))
+            faces.append(tuple(ring + [side_base + len(profile), side_base + len(profile) + 1]))
+            material_index.append(0)
+
     def height(x, y):
         return terrain_gen.sample_world_height(x, y, terrain_params) if terrain_params is not None else 0.0
 
@@ -129,17 +167,43 @@ def build_bridges(graph: StreetGraph, river: RiverSpec, preset, terrain_params, 
         z_a, z_b = height(ax, ay) + ROAD_LIFT, height(bx, by) + ROAD_LIFT
         deck_top = min(z_a, z_b) - 0.02
         box(x0, x1, y - half, y + half, deck_top - _DECK_THICKNESS, deck_top, 0)
-        rail_z0 = min(z_a, z_b) + CURB_HEIGHT
-        rail_z1 = max(z_a, z_b) + CURB_HEIGHT + _RAILING_HEIGHT
+        # A fascia band along both deck edges so the deck has a visible
+        # edge instead of blending into the sidewalk.
+        for side in (-1.0, 1.0):
+            outer = y + side * (half + _FASCIA_OVERHANG)
+            inner = y + side * (half - 0.05)
+            box(x0, x1, min(outer, inner), max(outer, inner),
+                deck_top - _DECK_THICKNESS - _FASCIA_DROP, deck_top + CURB_HEIGHT, 0)
+        # Railings: a low parapet kerb, posts every ~2 m and a slim top rail
+        # (v0.13 had one 1.1 m solid box per side that read as a concrete wall).
+        rail_base = max(z_a, z_b) + CURB_HEIGHT
         for side in (-1.0, 1.0):
             outer = y + side * half
-            inner = outer - side * 0.12
-            box(x0, x1, min(outer, inner), max(outer, inner), rail_z0, rail_z1, 1)
-        # One pier in the middle of the water, down into the riverbed.
+            inner = outer - side * _PARAPET_THICKNESS
+            lo, hi = min(outer, inner), max(outer, inner)
+            box(x0, x1, lo, hi, rail_base - 0.02, rail_base + _PARAPET_HEIGHT, 0)
+            post_count = max(2, int((x1 - x0) / _POST_SPACING) + 1)
+            for k in range(post_count):
+                px = x0 + (x1 - x0) * k / (post_count - 1)
+                px = min(max(px, x0 + _POST_SIZE / 2), x1 - _POST_SIZE / 2)
+                box(px - _POST_SIZE / 2, px + _POST_SIZE / 2, lo, hi,
+                    rail_base + _PARAPET_HEIGHT, rail_base + _RAILING_HEIGHT, 1)
+            box(x0, x1, lo, hi, rail_base + _RAILING_HEIGHT - _RAIL_SIZE, rail_base + _RAILING_HEIGHT, 1)
+            box(x0, x1, lo + (hi - lo) * 0.3, hi - (hi - lo) * 0.3,
+                rail_base + _PARAPET_HEIGHT + (_RAILING_HEIGHT - _PARAPET_HEIGHT) * 0.5 - _RAIL_SIZE / 2,
+                rail_base + _PARAPET_HEIGHT + (_RAILING_HEIGHT - _PARAPET_HEIGHT) * 0.5 + _RAIL_SIZE / 2, 1)
+        # One pier in the middle of the water, down into the riverbed, and
+        # an arched soffit from the deck down to the pier on either side.
         px = river.points[min(range(len(river.points)), key=lambda i: abs(river.points[i][1] - y))][0]
         px = max(x0 + 1.5, min(x1 - 1.5, px))
         bed = height(px, y) - RIVER_DEPTH - 0.5
         box(px - 1.0, px + 1.0, y - half * 0.7, y + half * 0.7, bed, deck_top - _DECK_THICKNESS + 0.05, 0)
+        soffit_top = deck_top - _DECK_THICKNESS + 0.02
+        arch_depth = min(_ARCH_DEPTH, max(0.5, soffit_top - bed - 1.0))
+        for span_lo, span_hi in ((x0, px - 1.0), (px + 1.0, x1)):
+            if span_hi - span_lo < 3.0:
+                continue
+            arch(span_lo, span_hi, y - half * 0.85, y + half * 0.85, soffit_top, arch_depth)
 
     mesh = bpy.data.meshes.new(BRIDGES_OBJECT_NAME)
     mesh.from_pydata(verts, [], faces)

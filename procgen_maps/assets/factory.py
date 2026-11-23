@@ -97,8 +97,11 @@ def _get_or_build_instance_source(asset_id: str, detail: str):
 
     key = (asset_id, detail)
     cached = _source_collection_cache.get(key)
-    if cached is not None and cached.name in bpy.data.collections:
-        return cached
+    try:
+        if cached is not None and cached.name in bpy.data.collections:
+            return cached
+    except ReferenceError:
+        pass   # the cached collection was removed behind our back (orphan purge, file reload): rebuild
 
     asset_def = library.get_asset(asset_id)
     params = asset_def.builder(detail)

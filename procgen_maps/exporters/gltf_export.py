@@ -1,16 +1,16 @@
 """glTF/GLB export, wrapping Blender's built-in glTF exporter.
 
-procgen_maps generates everything into collections directly under the scene,
-so exporting the whole scene captures the full generated map.
+Since v0.14 the export goes through `game_export.export_game_gltf`, which
+adds the game-engine hierarchy, collision meshes, LODs and the walkable
+ground around the same `bpy.ops.export_scene.gltf` call; this module is
+kept as the plain entry point (every option off = the v0.13 export plus
+the City/Terrain/Dungeon hierarchy).
 """
 
 
-def export_gltf(filepath: str) -> None:
-    import bpy
+def export_gltf(filepath: str, options=None) -> None:
+    from . import game_export
 
-    bpy.ops.export_scene.gltf(
-        filepath=filepath,
-        export_format='GLB',
-        export_apply=True,
-        use_selection=False,
-    )
+    if options is None:
+        options = game_export.GameExportOptions(collision=False, lods=False, walkable=False)
+    game_export.export_game_gltf(filepath, options)

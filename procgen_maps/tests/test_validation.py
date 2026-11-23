@@ -292,3 +292,102 @@ def test_road_corridors_cover_asphalt_and_both_sidewalks():
     assert (cx, cy) == (0.0, 0.0)
     # Reaches the outer corner of the crossing's sidewalk square.
     assert radius == pytest.approx((preset.street_width_arterial / 2 + SIDEWALK_WIDTH) * math.sqrt(2))
+
+
+# --- dungeon: levels, stairs, doors, themes (v0.14) ---------------------------
+
+from procgen_maps.generators.dungeon import (STAIR_LENGTH, STAIR_WIDTH, THEMES, Room, _quads_minus_holes,
+                                             plan_room_features, plan_room_props, plan_stairs,
+                                             room_graph_components, validate_dungeon, wall_torch_positions)
+
+_DUNGEON_FUZZ_SEEDS = tuple(range(50))
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_dungeon_fuzz_every_seed_validates_with_two_connected_levels(theme):
+    for seed in _DUNGEON_FUZZ_SEEDS:
+        layout = generate_dungeon(DungeonParams(seed=seed, theme=theme))
+        assert layout.levels == 2, seed
+        assert len(layout.stairs) == 1, seed
+        assert validate_dungeon(layout) == [], (seed, validate_dungeon(layout))
+        assert layout.rooms_on(1), seed
+
+
+def test_dungeon_levels_are_deterministic_and_theme_independent():
+    a = generate_dungeon(DungeonParams(seed=11, theme="crypt"))
+    b = generate_dungeon(DungeonParams(seed=11, theme="castle"))
+    assert repr(a.rooms) == repr(b.rooms) and repr(a.stairs) == repr(b.stairs)
+    c = generate_dungeon(DungeonParams(seed=12))
+    assert repr(c.rooms) != repr(a.rooms)
+
+
+def test_single_level_dungeon_has_no_stairs():
+    layout = generate_dungeon(DungeonParams(seed=3, levels=1))
+    assert layout.levels == 1 and layout.stairs == [] and validate_dungeon(layout) == []
+
+
+def test_plan_stairs_picks_a_fitting_overlap_or_none():
+    upper = [Room(0, 0.0, 0.0, 10.0, 8.0, 0)]
+    lower = [Room(1, 4.0, 2.0, 12.0, 9.0, 1)]
+    stairs = plan_stairs(upper, lower, 0, 1)
+    assert stairs is not None
+    x0, y0, x1, y1 = stairs.rect
+    assert 4.5 <= x0 and x1 <= 9.5 and 2.5 <= y0 and y1 <= 7.5   # inside the overlap with clearance
+    dims = (round(x1 - x0, 6), round(y1 - y0, 6))
+    assert dims in ((STAIR_LENGTH, STAIR_WIDTH), (STAIR_WIDTH, STAIR_LENGTH))
+    # Too small an overlap: nothing fits.
+    assert plan_stairs(upper, [Room(2, 8.5, 6.5, 10.0, 10.0, 1)], 0, 1) is None
+
+
+def test_room_features_keep_off_the_stairs():
+    hall = Room(1, 0.0, 0.0, 18.0, 12.0)
+    stairs_rect = (6.0, 4.0, 10.2, 5.8)
+    for kind, x, y, size in plan_room_features(hall, "boss", [stairs_rect]):
+        half = size / 2.0
+        assert not (x + half > stairs_rect[0] and x - half < stairs_rect[2]
+                    and y + half > stairs_rect[1] and y - half < stairs_rect[3]), (kind, x, y)
+
+
+def test_validate_dungeon_reports_overlaps_and_disconnection():
+    from procgen_maps.generators.dungeon import Corridor, DungeonLayout
+    layout = DungeonLayout(rooms=[Room(0, 0.0, 0.0, 6.0, 6.0), Room(1, 3.0, 3.0, 6.0, 6.0)], levels=1)
+    problems = validate_dungeon(layout)
+    assert any("overlap" in p for p in problems) and any("disconnected" in p for p in problems)
+    layout.rooms[1] = Room(1, 10.0, 0.0, 6.0, 6.0)
+    layout.corridors = [Corridor(0, (3.0, 3.0), (13.0, 3.0), 1.6)]
+    assert room_graph_components(layout.rooms, layout.corridors) == 1
+    assert validate_dungeon(layout) == []
+
+
+def test_quads_minus_holes_covers_the_rest_exactly():
+    pieces = _quads_minus_holes(0.0, 0.0, 10.0, 8.0, [(3.0, 2.0, 5.0, 4.0)])
+    assert abs(sum((x1 - x0) * (y1 - y0) for x0, y0, x1, y1 in pieces) - (80.0 - 4.0)) < 1e-9
+    for x0, y0, x1, y1 in pieces:
+        assert not (x1 > 3.0 and x0 < 5.0 and y1 > 2.0 and y0 < 4.0)
+    assert _quads_minus_holes(0.0, 0.0, 10.0, 8.0, []) == [(0.0, 0.0, 10.0, 8.0)]
+
+
+def test_wall_torches_skip_doorways_and_stay_inside():
+    room = Room(0, 0.0, 0.0, 21.0, 8.0)
+    doorways = [("south", 3.5, 1.2)]
+    spots = wall_torch_positions(room, doorways)
+    assert spots
+    for x, y, z in spots:
+        assert 0.0 < x < 21.0 and 0.0 < y < 8.0 and z > 1.0
+        assert not (y < 1.0 and abs(x - 3.5) < 2.2)   # none beside the south doorway
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_room_props_stay_inside_and_off_doorways_and_stairs(theme):
+    import random
+    room = Room(0, 0.0, 0.0, 16.0, 10.0)
+    stairs_rect = (6.0, 4.0, 10.2, 5.8)
+    doorways = [("west", 5.0, 1.2), ("north", 8.0, 1.2)]
+    props = plan_room_props(room, theme, random.Random(1), (), [stairs_rect], doorways)
+    assert props
+    for kind, x, y, z, w, d, h in props:
+        assert 0.0 <= x - w / 2 and x + w / 2 <= 16.0 and 0.0 <= y - d / 2 and y + d / 2 <= 10.0
+        assert not (x + w / 2 > stairs_rect[0] and x - w / 2 < stairs_rect[2]
+                    and y + d / 2 > stairs_rect[1] and y - d / 2 < stairs_rect[3]), kind
+        assert not (x - w / 2 < 1.5 and abs(y - 5.0) < 2.4), "prop in front of the west door"
+    assert plan_room_props(room, "unknown", random.Random(1)) == []

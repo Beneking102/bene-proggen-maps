@@ -169,6 +169,29 @@ def main():
                    os.path.isfile(filepath) and os.path.getsize(filepath) > 0)
 
         _run_stage("Export glTF", lambda: export_and_check("export_gltf", "procgen_maps.glb"))
+
+        def verify_game_glb():
+            from procgen_maps.exporters import game_export
+
+            before = {attr: len(getattr(bpy.data, attr)) for attr in ("objects", "meshes", "collections")}
+            names_before = sorted(obj.name for obj in bpy.data.objects)
+            counts = game_export.verify_glb(os.path.join(tmp_dir, "procgen_maps.glb"))
+            _check(f"re-imported GLB has objects ({counts['objects']})", counts["objects"] > 0)
+            _check(f"re-imported GLB has City/Terrain/Dungeon roots ({counts['roots']})", counts["roots"] == 3)
+            _check(f"re-imported GLB has collision objects ({counts['collision']})", counts["collision"] > 0)
+            _check(f"re-imported GLB has LOD0/LOD1 pairs ({counts['lod0']}/{counts['lod1']})",
+                   counts["lod0"] > 0 and counts["lod1"] > 0)
+            _check(f"re-imported GLB has walkable meshes ({counts['walkable']})", counts["walkable"] == 2)
+            after = {attr: len(getattr(bpy.data, attr)) for attr in ("objects", "meshes", "collections")}
+            _check(f"export + re-import leave the scene unchanged {before} -> {after}", before == after)
+            _check("export restores every object name", names_before == sorted(obj.name for obj in bpy.data.objects))
+            settings.export_naming = "UNITY"
+            bpy.ops.procgen_maps.export_gltf()
+            counts = game_export.verify_glb(os.path.join(tmp_dir, "procgen_maps.glb"))
+            _check(f"Unity naming: _col colliders present ({counts['collision']})", counts["collision"] > 0)
+            settings.export_naming = "GODOT"
+
+        _run_stage("Verify game GLB", verify_game_glb)
         _run_stage("Export JSON", lambda: export_and_check("export_json", "procgen_maps.json"))
         _run_stage("Export SVG", lambda: export_and_check("export_svg", "procgen_maps.svg"))
         _run_optional_export("Export FBX", lambda: export_and_check("export_fbx", "procgen_maps.fbx"))

@@ -55,6 +55,15 @@ class ProcgenMapsSettings(bpy.types.PropertyGroup):
         name="River", default=True,
         description="Run a river through the city: blocks in its path become water, streets crossing it become bridges")
     night_mode: bpy.props.BoolProperty(name="Night Mode", default=False, update=_on_night_mode_update)
+    dungeon_theme: bpy.props.EnumProperty(
+        name="Dungeon Theme",
+        items=(("crypt", "Crypt", "Grey stone, iron gates, sarcophagi, cool fill light"),
+               ("cave", "Cave", "Brown rock, no doors, boulders"),
+               ("castle", "Castle", "Sandstone and timber, oak doors, banners, warm fill light")),
+        default="crypt")
+    dungeon_levels: bpy.props.IntProperty(
+        name="Dungeon Levels", default=2, min=1, max=4,
+        description="Stacked levels joined by staircases (the boss hall is on the lowest one)")
 
     # Lighting: live-tunable sun/night-mode/window-glow/street-lamp values,
     # promoted from the hardcoded constants apply_night_mode used to carry
@@ -107,6 +116,27 @@ class ProcgenMapsSettings(bpy.types.PropertyGroup):
 
     export_directory: bpy.props.StringProperty(name="Export Directory", subtype='DIR_PATH',
                                                  default="//procgen_maps_export/")
+    # Game-engine export (exporters/game_export.py): all applied inside the
+    # glTF export only, the Blender scene itself is left as it is.
+    export_collision: bpy.props.BoolProperty(
+        name="Collision Meshes", default=True,
+        description="Box colliders for every building and prop, trimesh colliders for ground, streets, "
+                    "bridges and dungeon rooms (named for the engine's importer, see Naming)")
+    export_naming: bpy.props.EnumProperty(
+        name="Naming",
+        items=(("GODOT", "Godot", "-col / -colonly / -navmesh suffixes Godot's scene importer turns into "
+                                  "StaticBody3D colliders and NavigationRegion3D"),
+               ("UNITY", "Unity", "_col suffix under a Collision group, _LOD0/_LOD1 siblings for automatic "
+                                  "LODGroups, a _navmesh walkable mesh")),
+        default="GODOT")
+    export_lods: bpy.props.BoolProperty(
+        name="LODs", default=True,
+        description="Every building becomes <name>/<name>_LOD0 (full facade) + _LOD1 (box), every prop "
+                    "instance expands to its high and low detail meshes as _LOD0/_LOD1")
+    export_walkable: bpy.props.BoolProperty(
+        name="Walkable Ground", default=True,
+        description="One navmesh-friendly mesh per map: downsampled terrain + streets + park paths "
+                    "(Ground_Walkable) and the dungeon floors (Dungeon_Walkable)")
 
     showcase_angle: bpy.props.EnumProperty(
         name="Angle",
