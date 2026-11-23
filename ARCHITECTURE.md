@@ -113,16 +113,40 @@ CityPreset
   -> layout.generate_layout        (Block[], StreetSegment[])       [grid|raster]
   -> zones.classify_zones          ({block_id: zone_name})
   -> streets.build_street_graph    (StreetGraph: nodes/edges/degree)
-  -> buildings.plan_buildings      (BuildingPlan[])
-  -> props.plan_props              (PropPlacement[])
-  -> streets.build_street_meshes   -> street mesh objects
-  -> buildings.build_building_meshes -> building mesh objects
+  -> special_buildings.plan_special_buildings / buildings.plan_buildings
+                                   (BuildingPlan[]; both take the StreetGraph and
+                                    pull footprints back from the roads via setback.py)
+  -> props.plan_props              (PropPlacement[]; + forest ring outside layout.radius)
+  -> signage.plan_signage          (SignPlacement[])
+  -> streets.build_street_meshes   -> road objects (asphalt + sidewalk/curb, 2 UV maps)
+  -> buildings.build_building_meshes -> building mesh objects (3 material slots)
   -> props.build_props             -> prop Empty objects
 ```
+
+`layout.py`'s "grid" mode is a jittered regular lattice; "raster" mode
+(Metropole, Industrial) is an irregular grid - uneven line spacing,
+clipped to a circle, with some lots merged into bigger blocks - whose
+street graph is guaranteed to be one connected component with real
+intersections (the earlier Voronoi-spoke network had none; see the
+function's docstring). `setback.py` is pure rectangle-vs-road geometry
+(`rect_segment_distance`, `shrink_footprint_for_setback`) that keeps a
+sidewalk's width of clearance between every footprint and the road edge.
 
 If `terrain_params` is passed in, `build_street_meshes` and
 `build_building_meshes` call `terrain.sample_world_height` per point/
 footprint so streets and buildings sit on the terrain surface.
+
+**Materials** are all shared, parametrized node setups created once by a
+`get_or_create_*` function and keyed off per-object custom properties or
+per-mesh UV data rather than duplicated per object: `city_mat.py`
+(facade + window glass + roof), `road_mat.py` (asphalt with markings,
+sidewalk concrete; driven by the `ProcgenMaps_Road`/`ProcgenMaps_RoadEnds`
+UV maps and `procgen_maps_road_*` properties), `terrain_mat.py`,
+`prop_mat.py` (per-instance variation through Object Info > Random),
+`dungeon_mat.py`. Every outdoor material's surface shader is routed
+through `atmosphere.py`'s single `ProcgenMaps_AerialPerspective` node
+group, so the Lighting panel's haze slider and sun presets retune the
+whole scene by editing two nodes.
 
 **Dungeon** (`generators/dungeon.py`, wired from
 `PROCGEN_OT_generate_dungeon`) is a fully independent path: BSP-partition
@@ -160,8 +184,10 @@ Object name prefixes:
 - `ProcgenMaps_Building_<index>` - one per generated building
   (`buildings.py`'s `BUILDINGS_PREFIX`).
 - `ProcgenMaps_Street_Seg<index>` / `ProcgenMaps_Street_Node<index>` - one
-  road-strip object per street-graph edge, one intersection fan per
-  3+-degree node (`streets.py`'s `STREETS_PREFIX`).
+  road object per street-graph edge (asphalt strip in material slot 0,
+  both sidewalks + curbs in slot 1), one intersection fan per 3+-degree
+  node, sized by that node's widest street (`streets.py`'s
+  `STREETS_PREFIX`).
 - `<asset_id>_inst` - one Empty per placed prop, e.g. `tree_03_inst`,
   `street_lamp_inst`, `parked_car_inst` (`assets/factory.py`'s `spawn`).
 - `ProcgenMaps_AssetSrc_<asset_id>_<detail>` /
@@ -183,7 +209,10 @@ read back with `obj.get("key")`):
 | `procgen_maps_material_index` | building objects | index into `city_mat.py`'s facade color ramp, read live by the shared material's Attribute node |
 | `procgen_maps_tint` | building objects | per-building random 0..1 value, mixed into the facade color as a +-15% brightness variation so same-facade buildings don't look identical |
 | `procgen_maps_block_id` | building objects | originating `Block.id`, for traceability back to the layout |
+| `procgen_maps_base_z`, `procgen_maps_floor_height` | building objects | ground height and floor pitch, read by the facade shader's grime band and floor-slab lines |
+| `procgen_maps_roof_index` | building objects | 0 = flat gravel roof, 1-3 = tile colors for gabled roofs (`city_mat.py`'s roof ramp) |
 | `procgen_maps_street_class` | street segment objects | `"arterial"` or `"local"`, used for width and prop offset |
+| `procgen_maps_road_width`, `procgen_maps_road_lanes` | street segment objects | meters / 1 (local) or 2 (arterial); drive the asphalt shader's marking layout |
 | `procgen_maps_asset_id` | prop Empties | which `assets/library.py` entry this instance is, e.g. `"street_lamp"` - also used to find lamps for Night Mode's point lights |
 | `procgen_maps_lod_detail` | prop Empties | current LOD tier (`"high"`/`"medium"`/`"low"`), compared against in `update_lod` to skip no-op re-assignments |
 

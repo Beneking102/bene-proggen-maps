@@ -50,7 +50,18 @@ Notes:
   run_smoke_tests.py` uses to exercise the bpy-dependent build/export code
   paths that plain pytest can't reach (see `ARCHITECTURE.md`'s Testing
   section) - run it the same way, via a real `blender --background`
-  invocation, not `python run_smoke_tests.py`.
+  invocation, not `python run_smoke_tests.py`. Pass `--python-exit-code 1`
+  so an uncaught exception fails the process (Blender otherwise exits 0).
+- `bpy.ops.procgen_maps.render_showcase()` / `.render_interior()` render
+  with Cycles on the CPU (`scene.cycles.device = 'CPU'`, denoised), so they
+  work on a machine without a GPU or display - the GitHub Actions
+  `blender-smoke` job renders a 320x180 frame this way. Resolution and
+  sample count come from `scene.procgen_maps.showcase_width/height/samples`.
+  The previous EEVEE showcase needed an OpenGL context and aborted
+  (SIGABRT, exit 134) on headless runners.
+- `scene.procgen_maps.lighting_preset` (`AFTERNOON`, `MIDDAY`,
+  `GOLDEN_HOUR`, `OVERCAST_SOFT`) sets sun, sky strength and film exposure
+  together; `haze_strength` tunes the aerial perspective.
 
 ## Performance tuning knobs
 

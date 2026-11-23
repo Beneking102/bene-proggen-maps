@@ -1,5 +1,56 @@
 # Optimization
 
+## v0.10.0 generation profile (headless Blender 5.2, idle priority, 8 threads)
+
+Measured with `cProfile` around `generate_terrain` + `generate_city` +
+`generate_dungeon` (seed 42, terrain on) and an order-insensitive
+fingerprint of every generated vertex/face/object/property, so each
+change could be classified as "same output, faster" or "different output
+by design". Wall-clock totals, second run of two (no profiler attached):
+
+| Preset | v0.9.0 | pure optimizations | + window-column fix | Night-mode toggle |
+|---|---|---|---|---|
+| Metropole | 26.9 s | 26.3 s | **7.7 s** | 1.30 s -> 0.41 s |
+| Kleinstadt | 2.50 s | 1.65 s | **1.57 s** | 0.42 s -> 0.13 s |
+| Dorf | 1.23 s | 0.78 s | **0.96 s** * | 0.09 s -> 0.04 s |
+| Industrial | 1.12 s | 0.79 s | **0.96 s** * | 0.11 s -> 0.04 s |
+
+\* Dorf/Industrial grew slightly in the last column because that commit
+also changed *what* is generated (sidewalks, connected raster streets with
+intersections, the forest ring), not because the fix is slower.
+
+**Where the time went (Metropole, v0.9.0, 32 s under cProfile):**
+
+- 24.1 s - `_add_window_row`: one `bmesh.ops.inset_individual` per window
+  bay, 114k calls. Every `bmesh.ops` call pays a setup cost proportional
+  to the mesh's current element count, so towers were quadratic-ish.
+  Profiling also exposed that the column subdivision never worked (see
+  `generators/city/buildings.py:_split_face_into_columns`): the "columns"
+  were the base face, the roof cap and the unsplit side face. Fixed with
+  `bmesh.utils.edge_split`/`face_split` (no operator overhead) plus one
+  inset call per floor and thickness.
+- 3.6 s - `set(bm.faces) - faces_before` per floor to find the extruded
+  faces; replaced by the new verts' `link_faces`.
+- 2.1 s - `_update_lamp_lights` (night mode): `bpy.data.objects.get()`
+  and the Python-implemented `obj.users_collection` per street lamp;
+  replaced by one name->object dict and one name->collection dict.
+- 1.3-2.3 s - `noise.fbm` called with scalars: 0-d numpy arrays through
+  four octaves of ufunc hash chains cost 150-300 us *per point*, and every
+  street vertex, prop, sign and building samples terrain height one point
+  at a time. A plain-Python scalar path (`_fbm_scalar`) is bit-identical
+  to the array path (pinned by a test over 1200 points) and ~15x faster.
+- 0.5-1.0 s - `build_terrain_mesh`: 262k Python tuples through
+  `from_pydata`; now numpy buffers + `foreach_set` (0.25 s).
+- 0.2 s - `flatten_terrain_for_footprints`: per-vertex `v.co` RNA access;
+  now one `foreach_get`/`foreach_set` round trip with numpy windows.
+
+**What is left (Metropole, 7.7 s):** ~2.8 s in `_build_single_building`
+(the per-floor extrude/translate/sort), ~1.1 s batched window insets,
+~0.7 s night-mode lamp lights, ~0.6 s `SpatialHashGrid.has_collision`,
+~0.3 s `from_pydata` for ~1.7k small meshes. A single-mesh-per-block
+builder or a numpy facade generator would be the next step; none of the
+remaining items is a hot spot on its own.
+
 ## Instance Collections for prop memory efficiency
 
 `procgen_maps/assets/factory.py` never creates a new mesh datablock per

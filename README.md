@@ -3,7 +3,8 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
 
 A Blender addon that procedurally generates cities, terrain, and dungeons,
-and exports them to common interchange formats. Targets Blender 4.2+.
+and exports them to common interchange formats. Targets Blender 4.2+
+(tested headless on 4.5 LTS in CI and 5.2 LTS locally).
 
 ## Features
 
@@ -12,14 +13,27 @@ and exports them to common interchange formats. Targets Blender 4.2+.
   building height range, zone mix, street widths, prop density and more.
 - **Procedural terrain**: an FBM (fractal Brownian motion) noise heightmap,
   sampled consistently so streets and buildings can follow terrain height
-  without ray-casting.
-- **Full city generation pipeline**: layout (grid or raster block partition)
-  -> zone classification -> street network -> buildings -> props, each stage
-  a separate, independently testable module.
+  without ray-casting; a slope/height-driven grass-rock shader with dry
+  patches, and a thinning forest ring outside the city so it blends into
+  the landscape instead of ending in a hard line.
+- **Full city generation pipeline**: layout (regular grid, or an irregular
+  grid with merged lots for the "raster" presets - always one connected
+  street network with real intersections) -> zone classification -> street
+  network -> building setbacks -> buildings -> props, each stage a separate,
+  independently testable module.
+- **Streets with sidewalks and markings**: every road is an asphalt strip
+  plus a raised curb/sidewalk on both sides; a single shared procedural
+  shader paints dashed or double center lines, lane dividers, edge lines,
+  zebra crossings at intersections, paint wear and paving joints from
+  meter-scaled UVs - no texture files. Parked cars sit in the kerbside
+  lane, lamps and trees on the sidewalk.
 - **12 procedural building facade types** (glass tower, office block, brick
   commercial, apartment slab/tower, townhouse, cottage, shopfront, warehouse,
   factory hall, industrial tower, mixed use), extruded floor-by-floor with
-  bmesh and driven by a shared parametrized facade material.
+  bmesh, with real window columns on every floor, parapet-walled flat
+  roofs or gabled tile roofs (own roof material), and a shared facade
+  shader with ground-level grime, rain streaks, floor-slab lines and
+  roughness variation on top of the per-building color/tint.
 - **5 special buildings** (supermarket, police station, hospital, fire
   station, school), placed by explicit zone/size selection rather than the
   random facade pick, each with an illuminated sign and, for hospitals, a
@@ -40,16 +54,24 @@ and exports them to common interchange formats. Targets Blender 4.2+.
 - **Night mode**: emissive building windows plus real point lights at every
   street lamp, toggled from the panel - also dips the procedural sky's sun
   below the horizon.
-- **Lighting panel**: live-tunable sun elevation/rotation/day-night energy,
-  window night-glow strength, and street lamp energy, each applying
-  immediately (no regenerate needed).
-- **Procedural sky + material detail**: a Nishita sky world (no HDRI file
-  needed) plus noise-driven grain/bump on facade and terrain materials for
-  higher-quality renders without baked textures.
+- **Lighting panel**: lighting presets (Afternoon, Midday, Golden Hour,
+  Soft Overcast) that set sun elevation/rotation, sky strength and film
+  exposure together, plus live-tunable sun fields, day/night exposure, a
+  haze (aerial perspective) slider, window night-glow strength and street
+  lamp energy, each applying immediately (no regenerate needed).
+- **Procedural sky + atmosphere**: a physical sky world (Nishita on 4.x,
+  multiple-scattering on 5.x; no HDRI file needed), AgX color management,
+  and a shared aerial-perspective node group that fades every material
+  toward the sky color with distance (warm for a low sun).
 - **Render Showcase Image**: one-click auto-framed render - computes a
   camera placement from whatever's been generated (`procgen_maps/rendering/`),
-  sets up day/night sun position, enables raytracing for correct glass, and
-  renders straight to the export directory.
+  sets up day/night sun position and renders with Cycles on the CPU
+  (denoised, sample count in the panel) straight to the export directory -
+  works identically in the editor, headless and on CI.
+- **Generate All / Randomize Seed**: one button for terrain + city, and a
+  dice button next to the seed field.
+- **Dungeon halls**: large BSP rooms get pillar grids, the boss room a
+  central dais, and the stone materials noise grain and bump.
 - **Export** to glTF/GLB, FBX, USDZ, a top-down SVG map, and a JSON stats
   sidecar.
 - **N-panel UI** under `View3D > Sidebar > Procgen Maps`, with a profiler

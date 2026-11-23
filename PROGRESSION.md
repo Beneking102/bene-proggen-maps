@@ -6,7 +6,108 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.9.0 — Dungeon interiors, park/parking vibrancy, driver-based animation (current)
+## v0.10.0 — CI fixed, 3.4x faster Metropole, and a city that finally looks like one (current)
+
+Three goals for this round, in order: make CI green, make generation
+faster, make the renders clearly better than v0.9.0 - and the three turned
+out to be the same story, because profiling and headless rendering kept
+exposing bugs that had been hiding in plain sight.
+
+**CI.** `pytest` failed at collection on both runners because the bare
+`pytest` CLI never puts the repo root on `sys.path` (a root `conftest.py`
+fixes that), and `blender-smoke` died with SIGABRT because the showcase
+render used EEVEE, which needs a GPU/OpenGL context even in
+`--background`. Both renders now run Cycles on the CPU (denoised), which
+also made every render in this entry possible on a machine whose GPU was
+busy. Running the smoke test on Blender 5.2 surfaced two API breaks too:
+the sky model enum lost `NISHITA` and the USD exporter lost
+`export_textures`; both are now detected via RNA. The workflow installs
+Blender's X11 libs, caches the download, passes `--python-exit-code 1`
+and is a real gate.
+
+**Determinism.** The same seed never produced the same city twice: window
+carving drew from the global `random`, rooftop/furniture seeds used
+`hash((block_id, "detail"))` (str hashing is randomized per process), and
+the per-floor "new faces" set was iterated in memory-address order. All
+three are fixed and pinned by tests; an order-insensitive fingerprint of
+every generated vertex/face/object is now identical run to run, which is
+what made the optimizations below verifiable.
+
+**Speed (see OPTIMIZATION.md for the full profile).** Metropole took
+26.9 s, 24 s of which were 114k single-face `bmesh.ops.inset_individual`
+calls - one per window bay. Chasing that revealed that the column
+subdivision had never worked: `subdivide_edges(use_grid_fill)` on two
+edges of a quad doesn't split it, it returned the *neighbouring* faces that
+gained a vertex - the base, the roof cap and the unsplit side - as the
+"columns". So the ground floor got one window per side, the roof got
+random nested insets tagged with the *window glass* material (that's why
+every flat roof in v0.8/v0.9 rendered as dark blue glass), and upper
+floors only had columns because the roof's fragmented boundary happened
+to extrude into pitch-wide strips. Columns are now cut with
+`bmesh.utils.edge_split`/`face_split` and all windows of a floor go through
+one inset call. Together with a numpy terrain build, a bit-identical
+scalar fast path for `fbm`, vectorized footprint flattening and dict
+lookups in the night-mode toggle: Metropole 26.9 s -> 7.7 s, Kleinstadt
+2.5 s -> 1.6 s, Dorf 1.2 s -> 1.0 s, night-mode toggle 1.3 s -> 0.4 s.
+
+**Layout.** Measuring building/road clearance for the sidewalk work found
+that the median Metropole wall stood 3.7 m *inside* the road, and that the
+raster presets' street graph had one isolated 2-node component per
+segment (823 of 823) - zero intersections, so no fans, crosswalks, stop
+signs or traffic lights ever applied there, and roads ended in mid-air.
+"Raster" mode is now an irregular street grid (uneven spacing, circular
+outline, 22% of lots merged into larger blocks) whose graph is one
+connected component with ~130 intersections and lots inset from every
+line by that street's half width plus the sidewalk. Grid-layout buildings
+get the same clearance from a tested setback solver.
+
+**Look.** Roads were untextured white planes; the terrain shader mapped
+absolute height onto a grass-dirt-snow ramp, so a city at 8-16 m sat on
+"frost"; and the physical sky at exposure 0 blew everything out. Now:
+asphalt with dashed/double center lines, lane dividers, edge lines, zebra
+crossings at intersections, paint wear and tire darkening, painted from
+meter-scaled UVs by one shared shader; raised curbs and paving-jointed
+sidewalks on every street; parked cars in the kerbside lane instead of on
+the grass; a slope/height-driven grass-rock ground with dry patches; a
+thinning forest ring outside the city; facades with ground grime, rain
+streaks, floor-slab lines and roughness variation; parapet-walled flat
+roofs and tiled gables with their own roof material; per-instance tree
+and car color variation; AgX with a medium-high-contrast look and
+per-preset exposure; a lifted, hazier sky dome; and a shared
+aerial-perspective node group that fades every material toward the sky
+color with distance (warm for the new Golden Hour preset). The Lighting
+panel gained presets (Afternoon/Midday/Golden Hour/Soft Overcast), haze,
+and day/night exposure; the main panel a Generate All button and a
+randomize-seed dice. Dungeons: pillar grids in large halls, a dais in the
+boss room, stone grain and bump.
+
+**Before/after - Metropole, seed 12, the same supermarket block (v0.9.0 render vs. this version's close-up):**
+![Before and after](docs/progression/v0.10.0-before-after.png)
+
+**Metropole, seed 12 - towers with real window columns on every floor, parapets, crosswalks, lane markings, kerbside cars:**
+![Metropole close-up](docs/progression/v0.10.0-metropole-close.png)
+
+**Metropole, seed 12 - skyline at a low angle, with the forest ring and aerial perspective:**
+![Metropole skyline](docs/progression/v0.10.0-metropole-skyline.png)
+
+**Kleinstadt, seed 4 - overview: connected grid, sidewalks, tiled roofs, grass/forest edge:**
+![Kleinstadt overview](docs/progression/v0.10.0-kleinstadt-overview.png)
+
+**Kleinstadt, seed 4 - Golden Hour preset (warm haze, long shadows):**
+![Golden hour](docs/progression/v0.10.0-kleinstadt-golden-hour.png)
+
+**Kleinstadt, seed 4 - night mode: warm pulsing windows, lamp pools on the asphalt:**
+![Night](docs/progression/v0.10.0-kleinstadt-night.png)
+
+**Dungeon, seed 7 - the boss hall with its pillar grid and dais, lit only by the doorway torches:**
+![Dungeon hall](docs/progression/v0.10.0-dungeon-hall.png)
+
+**Video - Kleinstadt, seed 4, a 4 s Cycles-CPU camera sweep (960x540, 24 fps, H.264; kept short so it could render on the CPU alongside the stills - the same `flyover` setup renders longer/larger clips by changing the frame count and resolution):**
+[docs/progression/v0.10.0-kleinstadt-flyover.mp4](docs/progression/v0.10.0-kleinstadt-flyover.mp4)
+
+---
+
+## v0.9.0 — Dungeon interiors, park/parking vibrancy, driver-based animation
 
 Scoped from the user's list after v0.8.1 shipped: "improve the dungeon, make
 animation and better tree / terrain and fountain, park, parking spaces, less

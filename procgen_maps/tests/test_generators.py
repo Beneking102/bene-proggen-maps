@@ -553,15 +553,15 @@ def test_generate_dungeon_is_deterministic():
 
 
 def test_plan_room_features_pillars_only_in_large_rooms_and_clear_of_walls():
-    small = Room(0, 0.0, 0.0, 7.0, 6.0)
+    small = Room(0, 0.0, 0.0, 8.0, 6.0)
     assert plan_room_features(small, "normal") == []
     hall = Room(1, 10.0, 20.0, 18.0, 12.0)
     features = plan_room_features(hall, "normal")
     pillars = [f for f in features if f[0] == "pillar"]
     assert len(pillars) >= 4 and all(f[0] == "pillar" for f in features)
     for _kind, x, y, size in pillars:
-        assert hall.x + 2.0 <= x <= hall.x + hall.width - 2.0
-        assert hall.y + 2.0 <= y <= hall.y + hall.height - 2.0
+        assert hall.x + 1.5 <= x <= hall.x + hall.width - 1.5
+        assert hall.y + 1.5 <= y <= hall.y + hall.height - 1.5
         assert size == pytest.approx(0.6)
     assert plan_room_features(hall, "normal") == features   # deterministic
 

@@ -220,9 +220,9 @@ def _wall_segments_with_gaps(wall_min: float, wall_max: float,
     return segments
 
 
-_PILLAR_MIN_ROOM_SIDE = 9.0      # meters; rooms narrower than this on either axis get no pillars
-_PILLAR_INSET = 2.2              # meters from the walls to the outer pillar line
-_PILLAR_SPACING = 4.5            # meters between pillars (rounded to fit the room)
+_PILLAR_MIN_ROOM_SIDE = 7.0      # meters; rooms narrower than this on either axis get no pillars
+_PILLAR_INSET = 1.8              # meters from the walls to the outer pillar line
+_PILLAR_SPACING = 3.6            # meters between pillars (rounded to fit the room)
 _PILLAR_SIZE = 0.6               # meters, square column side
 _DAIS_SIZE_FRACTION = 0.3        # boss-room dais side as a fraction of the room's shorter side
 _DAIS_HEIGHT = 0.35
@@ -505,12 +505,19 @@ def _build_corridor_mesh(corridor: Corridor):
         (end.x - side.x, end.y - side.y),
         (end.x + side.x, end.y + side.y),
     ]
-    verts = [(px, py, 0.0) for (px, py) in corners]
+    # 1 cm below the room floors: every corridor starts at a room *center*
+    # (see connect()), so the part inside the room was coplanar with the
+    # room's own floor and z-fought as a black stripe across it; sunk a
+    # hair, it is hidden under the floor and only shows between rooms.
+    verts = [(px, py, -0.01) for (px, py) in corners]
+
+    from ..materials import dungeon_mat
 
     name = f"{CORRIDOR_PREFIX}_{corridor.id}"
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
     mesh.update(calc_edges=True)
+    mesh.materials.append(dungeon_mat.get_or_create_dungeon_material("floor"))   # was unmaterialed (black)
     return bpy.data.objects.new(name, mesh)
 
 
