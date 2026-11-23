@@ -21,6 +21,7 @@ class CityPreset:
     cars_enabled: bool
     night_mode_default: bool
     seed: int = 0
+    water: str = "river"                 # 'river' (one river through the city, bridged) or 'none'
 
 
 PRESETS: Dict[str, CityPreset] = {

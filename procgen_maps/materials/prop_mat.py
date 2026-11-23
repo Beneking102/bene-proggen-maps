@@ -20,6 +20,10 @@ _COLORS = {
     "sign_pole": (0.20, 0.20, 0.20, 1.0),
     "sign_board": (0.90, 0.90, 0.85, 1.0),
     "rooftop_unit": (0.55, 0.55, 0.58, 1.0),
+    "rooftop_tank": (0.45, 0.30, 0.18, 1.0),
+    "park_path": (0.62, 0.58, 0.50, 1.0),
+    "water": (0.05, 0.18, 0.26, 1.0),
+    "bridge": (0.40, 0.40, 0.42, 1.0),
     "furniture_wood": (0.45, 0.30, 0.18, 1.0),
     "furniture_soft": (0.55, 0.20, 0.22, 1.0),
     "furniture_metal": (0.5, 0.5, 0.52, 1.0),
@@ -40,6 +44,8 @@ _ROUGHNESS_OVERRIDES = {
     "fountain_water": 0.12,
     "parking_asphalt": 0.9,
     "parking_line": 0.6,
+    "water": 0.04,
+    "rooftop_tank": 0.55,
 }
 
 

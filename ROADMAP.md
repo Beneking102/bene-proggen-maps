@@ -21,7 +21,7 @@ entry with renders. Order and scope may shift, but the themes are fixed.
   asphalt, disconnected streets, floating/buried objects and orphan
   datablocks for the current scene.
 
-## v0.12 - Performance and scale (this release)
+## v0.12 - Performance and scale (shipped)
 
 - [x] Terrain under roads: the ground can no longer poke through the
   asphalt or sidewalks (road bed sunk into the terrain mesh, checked by
@@ -37,13 +37,21 @@ entry with renders. Order and scope may shift, but the themes are fixed.
 - [ ] Large-map mode (chunked generation), runtime-budget tests, memory
   measurements.
 
-## v0.13 - City visuals
+## v0.13 - City visuals (this release)
 
-- Night windows: contiguous lit apartments/floors instead of a
-  checkerboard, warm and cool light temperatures.
-- More facade and roof variety, balconies, shop rows, parks and plazas,
-  street trees and furniture.
-- Water: a river or lake with bridges and shoreline zones.
+- [x] Night windows: contiguous lit apartments/floors instead of a
+  checkerboard, warm and cool light temperatures, dark floors.
+- [x] More facade and roof variety: balconies on the residential types,
+  awnings and sign boards over shop entrances, hip and sawtooth roofs,
+  rooftop tanks and masts.
+- [x] Parks with paths, benches and lamps; paved plazas.
+- [x] Water: a river with sloped banks and bridges (deck, railings, pier),
+  validator rules for it. Not done: a lake option.
+- [x] The road-bed "lip" along the sidewalks is gone (shallower bed at the
+  sidewalk edge plus a sidewalk skirt).
+- [ ] Street trees: already there since v0.10; no new street furniture
+  beyond park benches/lamps this round.
+- [ ] Metropole under 4 s (carried over from v0.12; see OPTIMIZATION.md).
 
 ## v0.14 - World, dungeon, game export
 

@@ -196,12 +196,44 @@ def flatten_terrain_for_footprints(terrain_obj, params: TerrainParams, footprint
     mesh.update()
 
 
-ROAD_BED_DEPTH = 0.5      # meters the terrain mesh is sunk below the heightfield under every street footprint
-ROAD_BED_MARGIN = 2.5     # meters of blend from the sunk road bed back up to the untouched terrain
+ROAD_BED_DEPTH = 0.7        # meters the terrain mesh is sunk below the heightfield under the asphalt (3 m road chunks can sit ~0.5 m under the field at a noise peak)
+ROAD_BED_EDGE_DEPTH = 0.2   # ... and at the sidewalk's outer edge (the sidewalk hides the ramp between)
+ROAD_BED_MARGIN = 1.5       # meters of blend from the sidewalk edge back up to the untouched terrain
+ROAD_BED_SHOULDER = 2.0     # meters inside the corridor edge over which the bed rises (the sidewalk width)
+
+
+def corridor_profile(dist, half_width, depth, shallow_depth, shoulder, margin):
+    """(bed depth, blend weight) for terrain vertices `dist` meters from a
+    corridor's centerline (pure numpy): the bed is the full `depth` under
+    the asphalt, rising linearly to `shallow_depth` across the `shoulder`
+    (the sidewalk) so the ground just outside the curb is not a
+    half-meter trench, and stays `shallow_depth` outside; the weight is 1
+    inside the corridor and fades to 0 over `margin` outside it."""
+    import numpy as np
+
+    inner = half_width - shoulder
+    if shoulder > 0.0:
+        bed = depth + (shallow_depth - depth) * np.clip((dist - inner) / shoulder, 0.0, 1.0)
+    else:
+        bed = np.full_like(dist, depth, dtype=np.float64)
+    outside = np.maximum(dist - half_width, 0.0)
+    if margin > 0.0:
+        fade = np.clip(1.0 - outside / margin, 0.0, 1.0)
+    else:
+        fade = (outside <= 0.0).astype(np.float64)
+    return bed, fade
+
+
+def corridor_lowering(dist, half_width, depth, shallow_depth, shoulder, margin):
+    """How many meters a flat terrain sinks at `dist` from the centerline
+    (corridor_profile's bed times its weight). Unit-tested."""
+    bed, fade = corridor_profile(dist, half_width, depth, shallow_depth, shoulder, margin)
+    return bed * fade
 
 
 def lower_terrain_under_corridors(terrain_obj, params: TerrainParams, corridors, discs=(),
-                                  depth=ROAD_BED_DEPTH, margin=ROAD_BED_MARGIN):
+                                  depth=ROAD_BED_DEPTH, margin=ROAD_BED_MARGIN,
+                                  shallow_depth=ROAD_BED_EDGE_DEPTH, shoulder=ROAD_BED_SHOULDER):
     """Sink the terrain mesh under every street footprint so the ground
     never pokes through the asphalt or the sidewalks.
 
@@ -210,10 +242,14 @@ def lower_terrain_under_corridors(terrain_obj, params: TerrainParams, corridors,
     vertices ~2 m apart - between a road's samples the two surfaces
     disagree by up to a few decimeters wherever the ground curves, which
     showed as green blotches through every crossing and along the roads.
-    Lowering the mesh by `depth` under the corridor (and blending back to
-    the heightfield over `margin` meters outside it) puts the ground
-    reliably below the road surface everywhere; the curb/sidewalk hides
-    the step at the edge.
+    Lowering the mesh by `depth` under the corridor puts the ground
+    reliably below the road surface everywhere. The bed is `depth` deep
+    under the asphalt and rises to `shallow_depth` at the corridor's
+    outer edge across the `shoulder` (the sidewalk - see
+    corridor_lowering), then blends back to the heightfield over `margin`
+    meters: v0.12 sank the whole corridor 0.5 m and left a visible trench
+    along the outside of every sidewalk. A skirt on the sidewalk's outer
+    edge (streets.py's SIDEWALK_SKIRT) hides what remains of the step.
 
     `corridors` = (ax, ay, bx, by, half_width) per road edge (asphalt plus
     sidewalks), `discs` = (cx, cy, radius) per node. Lowering is taken as
@@ -231,21 +267,22 @@ def lower_terrain_under_corridors(terrain_obj, params: TerrainParams, corridors,
     coords = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
     mesh.vertices.foreach_get("co", coords)
     coords = coords.reshape(res, res, 3)
-    lowering = np.zeros((res, res), dtype=np.float64)
+    bed_depth = np.zeros((res, res), dtype=np.float64)   # bed depth below the heightfield, per vertex
+    weight = np.zeros((res, res), dtype=np.float64)      # 1 inside a corridor, fading out over the margin
+    inside = np.zeros((res, res), dtype=bool)
 
     def index_range(lo, hi):
         lo_index = max(0, int((lo + half) / step) - 1)
         hi_index = min(res - 1, int((hi + half) / step) + 1)
         return lo_index, hi_index
 
-    def apply(row_lo, row_hi, col_lo, col_hi, dist, half_width):
-        outside = np.maximum(dist - half_width, 0.0)
-        if margin > 0:
-            factor = np.clip(1.0 - outside / margin, 0.0, 1.0)
-        else:
-            factor = (outside <= 0.0).astype(np.float64)
-        window = lowering[row_lo:row_hi + 1, col_lo:col_hi + 1]
-        np.maximum(window, factor, out=window)
+    def apply(row_lo, row_hi, col_lo, col_hi, dist, half_width, shoulder_width):
+        bed, fade = corridor_profile(dist, half_width, depth, shallow_depth, min(shoulder_width, half_width), margin)
+        window = bed_depth[row_lo:row_hi + 1, col_lo:col_hi + 1]
+        np.maximum(window, np.where(fade > 0.0, bed, 0.0), out=window)
+        window = weight[row_lo:row_hi + 1, col_lo:col_hi + 1]
+        np.maximum(window, fade, out=window)
+        inside[row_lo:row_hi + 1, col_lo:col_hi + 1] |= dist <= half_width
 
     for (ax, ay, bx, by, half_width) in corridors:
         reach = half_width + margin
@@ -263,7 +300,7 @@ def lower_terrain_under_corridors(terrain_obj, params: TerrainParams, corridors,
         else:
             t = np.clip(((x - ax) * dx + (y - ay) * dy) / length_sq, 0.0, 1.0)
         dist = np.hypot(x - (ax + t * dx), y - (ay + t * dy))
-        apply(row_lo, row_hi, col_lo, col_hi, dist, half_width)
+        apply(row_lo, row_hi, col_lo, col_hi, dist, half_width, shoulder)
 
     for (cx, cy, radius) in discs:
         reach = radius + margin
@@ -273,15 +310,19 @@ def lower_terrain_under_corridors(terrain_obj, params: TerrainParams, corridors,
             continue
         window = coords[row_lo:row_hi + 1, col_lo:col_hi + 1]
         dist = np.hypot(window[..., 0].astype(np.float64) - cx, window[..., 1].astype(np.float64) - cy)
-        apply(row_lo, row_hi, col_lo, col_hi, dist, radius)
+        # No shoulder under a node disc: its rim is still under the asphalt
+        # fan / sidewalk corners, which are planar over a wider span than a
+        # road chunk and need the full bed depth right to the edge.
+        apply(row_lo, row_hi, col_lo, col_hi, dist, radius, 0.0)
 
-    # The bed is `depth` under the raw heightfield; vertices a building pad
-    # has raised above it (flatten_terrain_for_footprints runs first, and
-    # its blend reaches under the sidewalk) are pulled down too, so the
-    # bed wins everywhere inside a corridor.
-    bed = generate_heightmap(params) - depth
+    # The bed is `bed_depth` under the raw heightfield; vertices a building
+    # pad has raised above it (flatten_terrain_for_footprints runs first,
+    # and its blend reaches under the sidewalk) are pulled down too, so
+    # the bed wins everywhere inside a corridor. Outside, the pull fades
+    # with the weight so the margin stays continuous with a pad.
+    bed = generate_heightmap(params) - bed_depth
     z = coords[..., 2].astype(np.float64)
-    coords[..., 2] = (z - lowering * np.maximum(z - bed, 0.0)).astype(np.float32)
+    coords[..., 2] = (z - weight * np.maximum(z - bed, 0.0)).astype(np.float32)
     mesh.vertices.foreach_set("co", coords.ravel())
     mesh.update()
-    return int(np.count_nonzero(lowering >= 1.0))
+    return int(np.count_nonzero(inside))

@@ -119,6 +119,8 @@ _PART_MATERIALS_BY_KIND = {
     "car": ("car",),
     "sign": ("sign_pole", "sign_board"),
     "rooftop_unit": ("rooftop_unit",),
+    "rooftop_tank": ("furniture_metal", "rooftop_tank"),
+    "antenna_mast": ("furniture_metal",),
     "fountain": ("fountain_stone", "fountain_water"),
     "parking_lot": ("parking_asphalt", "parking_line"),
     "bed": ("furniture_soft",),
@@ -193,6 +195,25 @@ def _build_primitive_mesh(name: str, params: dict):
     elif kind == "rooftop_unit":
         part_faces.append((0, _add_cube(bm, (params["width"], params["depth"], params["height"]),
                                          z_offset=params["height"] / 2.0)))
+
+    elif kind == "rooftop_tank":
+        r, h, legs = params["radius"], params["height"], params["leg_height"]
+        segments = params["segments"]
+        for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            leg = _add_cube(bm, (0.12, 0.12, legs), z_offset=legs / 2.0)
+            for vert in {vert for face in leg for vert in face.verts}:
+                vert.co.x += sx * r * 0.6
+                vert.co.y += sy * r * 0.6
+            part_faces.append((0, leg))
+        part_faces.append((1, _add_cone(bm, r, r, h, segments, z_offset=legs + h / 2.0)))
+        part_faces.append((1, _add_cone(bm, r, r * 0.3, 0.5, segments, z_offset=legs + h + 0.25)))
+
+    elif kind == "antenna_mast":
+        r, h = params["radius"], params["height"]
+        part_faces.append((0, _add_cone(bm, r * 2.5, r * 2.5, 0.3, params["segments"], z_offset=0.15)))
+        part_faces.append((0, _add_cone(bm, r, r * 0.5, h, params["segments"], z_offset=h / 2.0)))
+        part_faces.append((0, _add_cube(bm, (1.2, 0.05, 0.05), z_offset=h * 0.75)))
+        part_faces.append((0, _add_cube(bm, (0.05, 1.2, 0.05), z_offset=h * 0.9)))
 
     elif kind == "fountain":
         base_r = params["base_radius"]

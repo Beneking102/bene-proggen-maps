@@ -51,6 +51,9 @@ class ProcgenMapsSettings(bpy.types.PropertyGroup):
     enable_parks: bpy.props.BoolProperty(name="Parks", default=True)
     enable_commercial: bpy.props.BoolProperty(name="Commercial Zones", default=True)
     enable_cars: bpy.props.BoolProperty(name="Parked Cars", default=True)
+    enable_water: bpy.props.BoolProperty(
+        name="River", default=True,
+        description="Run a river through the city: blocks in its path become water, streets crossing it become bridges")
     night_mode: bpy.props.BoolProperty(name="Night Mode", default=False, update=_on_night_mode_update)
 
     # Lighting: live-tunable sun/night-mode/window-glow/street-lamp values,
@@ -76,7 +79,7 @@ class ProcgenMapsSettings(bpy.types.PropertyGroup):
     # Night defaults retuned for v0.10's AgX/exposure pipeline: +1 EV at
     # night, a lower window glow (0.25 clipped every lit pane to white) and
     # stronger lamps so their pools actually read on the ground.
-    window_emission_strength: bpy.props.FloatProperty(name="Window Glow Strength", default=0.12,
+    window_emission_strength: bpy.props.FloatProperty(name="Window Glow Strength", default=0.35,
                                                         min=0.0, max=5.0, update=_on_window_emission_update)
     street_lamp_energy: bpy.props.FloatProperty(name="Street Lamp Energy", default=1200.0,
                                                   min=0.0, max=5000.0, update=_on_street_lamp_energy_update)

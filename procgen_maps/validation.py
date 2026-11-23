@@ -260,6 +260,43 @@ def validate_city_plan(plan, preset) -> ValidationReport:
                 report.add("parking_in_building",
                            f"parking lot of block {spec.block_id} overlaps a building", (spec.cx, spec.cy))
 
+    # Water: no building, tree, bench or fountain in the river or on its
+    # banks (lamps and cars on a bridge deck are fine); at least one bridge.
+    river = getattr(plan.layout, "river", None)
+    if river is not None:
+        from .generators.city.water import bridge_edges
+
+        report.checked["river_corridors"] = len(river.points) - 1
+        for index, rect, building in footprints:
+            corners = ((rect[0], rect[1]), (rect[2], rect[1]), (rect[2], rect[3]), (rect[0], rect[3]),
+                       ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0))
+            if any(river.contains(x, y) for x, y in corners):
+                report.add("building_in_water", f"building {index} ({building.facade.key}) stands in the river",
+                           corners[4])
+        for placement in plan.prop_placements:
+            x, y, _z = placement.location
+            if library.get_asset(placement.asset_id).category in ("lamp", "car"):
+                continue
+            if river.contains(x, y, river.bank_margin):
+                report.add("prop_in_water", f"{placement.asset_id} stands in the river or on its bank", (x, y))
+        for placement in plan.sign_placements:
+            x, y, _z = placement.location
+            if river.contains(x, y, river.bank_margin):
+                report.add("sign_in_water", f"{placement.kind} sign stands in the river or on its bank", (x, y))
+        if not bridge_edges(graph, river):
+            report.add("river_without_bridge", "no street crosses the river")
+
+    # Park paths: trees never stand on a path (plaza rims have planted trees).
+    park_paths = [spec for spec in (getattr(plan, "park_specs", None) or []) if spec.kind == "park"]
+    if park_paths:
+        report.checked["parks"] = len(park_paths)
+        for placement in plan.prop_placements:
+            x, y, _z = placement.location
+            if library.get_asset(placement.asset_id).category != "tree":
+                continue
+            if any(spec.on_paving(x, y) for spec in park_paths):
+                report.add("tree_on_path", f"{placement.asset_id} stands on a park path", (x, y))
+
     # Street network: one connected component, no degenerate edges.
     report.checked["street_edges"] = len(graph.edges)
     components = street_components(graph)
@@ -285,7 +322,7 @@ def validate_scene(terrain_params=None, report: ValidationReport = None) -> Vali
 
     from .assets import library
     from .generators import terrain as terrain_gen
-    from .generators.city.streets import ROAD_LIFT
+    from .generators.city.streets import ROAD_LIFT, SIDEWALK_SKIRT
 
     report = report if report is not None else ValidationReport()
 
@@ -301,9 +338,13 @@ def validate_scene(terrain_params=None, report: ValidationReport = None) -> Vali
                 checked += 1
                 _check_height(report, obj, expected, tolerance=0.3)
             elif obj.get("procgen_maps_facade_type") is not None and obj.get("procgen_maps_base_z") is not None:
-                xs = [v.co.x for v in obj.data.vertices]
-                ys = [v.co.y for v in obj.data.vertices]
-                cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+                if obj.get("procgen_maps_center_x") is not None:
+                    cx, cy = float(obj["procgen_maps_center_x"]), float(obj["procgen_maps_center_y"])
+                else:
+                    # Older meshes: the bounding box centre (no balconies/awnings then).
+                    xs = [v.co.x for v in obj.data.vertices]
+                    ys = [v.co.y for v in obj.data.vertices]
+                    cx, cy = (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
                 expected = terrain_gen.sample_world_height(cx, cy, terrain_params)
                 checked += 1
                 _check_height(report, obj, expected, tolerance=0.05, actual=float(obj["procgen_maps_base_z"]))
@@ -312,8 +353,10 @@ def validate_scene(terrain_params=None, report: ValidationReport = None) -> Vali
                 worst = 0.0
                 for vertex in obj.data.vertices:
                     expected = terrain_gen.sample_world_height(vertex.co.x, vertex.co.y, terrain_params)
-                    # Asphalt sits ROAD_LIFT above the ground, sidewalks a curb higher.
-                    worst = max(worst, abs(vertex.co.z - expected - ROAD_LIFT) - 0.2)
+                    # Asphalt sits ROAD_LIFT above the ground, sidewalks a curb
+                    # higher, and the sidewalk skirt reaches SIDEWALK_SKIRT down.
+                    delta = vertex.co.z - expected - ROAD_LIFT
+                    worst = max(worst, delta - 0.2, -delta - SIDEWALK_SKIRT - 0.2)
                 if worst > 0.0:
                     report.add("street_off_ground", f"{obj.name} deviates {worst:.2f} m from the terrain",
                                (obj.location.x, obj.location.y))

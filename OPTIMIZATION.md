@@ -1,5 +1,30 @@
 # Optimization
 
+## v0.13.0 profile (headless Blender 5.2, idle priority, 8 threads, seed 42)
+
+Same method and machine as the v0.12.0 table below, second of two runs.
+v0.13 is a visuals release and adds geometry everywhere (river + bridges,
+park paths/plazas, balconies, awnings, rooftop gear, sidewalk skirts, 3 m
+instead of 6 m road chunks), so the point of this table is to show what
+that cost, not a speed-up:
+
+| Preset | v0.12.0 total | v0.13.0 total | city only | objects | verts |
+|---|---|---|---|---|---|
+| Metropole | 4.98 s | **5.58 s** | 4.22 -> 4.80 s | 6,655 -> 6,993 | 1.09 M -> 1.12 M |
+| Kleinstadt | 1.65 s | **1.86 s** | 1.29 -> 1.50 s | 5,063 -> 5,021 | 331 k -> 352 k |
+| Dorf | 0.80 s | 0.87 s | 0.55 -> 0.62 s | 2,249 -> 2,206 | 288 k -> 295 k |
+| Industrial | 0.94 s | 1.08 s | 0.65 -> 0.80 s | 2,148 -> 2,015 | 345 k -> 354 k |
+
+The ~0.6 s the Metropole gained is spread over the finer road chunks and
+skirts (~0.2 s, pure-Python vertex lists), the balcony/awning boxes and
+roof shapes inside `_build_single_building` (~0.2 s) and the river, bridge
+and park meshes plus the second terrain-lowering pass (~0.1 s). The
+window-lighting plan and the per-face attribute layers are free: the
+lighting is drawn once per floor and written into the already-existing
+bmesh faces. The sub-4 s Metropole still needs the per-block building
+builder described under v0.12.0; nothing in this release changed where
+the time goes (~80% `_build_single_building`).
+
 ## v0.12.0 profile (headless Blender 5.2, idle priority, 8 threads, seed 42)
 
 Same method as the v0.10.0 table below (`generate_terrain` +

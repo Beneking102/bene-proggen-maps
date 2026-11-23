@@ -6,7 +6,7 @@ contract used by procgen_maps/generators/__init__.py.
 """
 from dataclasses import dataclass
 
-from . import buildings, layout, parking, props, signage, special_buildings, streets, zones  # noqa: F401
+from . import buildings, layout, parking, parks, props, signage, special_buildings, streets, water, zones  # noqa: F401
 
 CITY_ROOT_COLLECTION_NAME = "ProcgenMaps_City"
 
@@ -33,6 +33,11 @@ class CityPlan:
     prop_placements: list
     sign_placements: list
     parking_lot_specs: list
+    park_specs: list = None
+
+    @property
+    def river(self):
+        return self.layout.river
 
     @property
     def all_building_plans(self):
@@ -57,17 +62,27 @@ def plan_city(preset, terrain_params=None, seed=None) -> CityPlan:
     parking_lot_specs = parking.plan_parking_lots_for_supermarkets(
         city_layout.blocks, special_plans, roads=roads_from_graph(street_graph, preset))
 
+    park_specs = parks.plan_parks(city_layout.blocks, zone_by_block, preset, seed=seed,
+                                  roads=roads_from_graph(street_graph, preset))
+
     prop_placements = props.plan_props(street_graph, city_layout.blocks, zone_by_block, preset, seed=seed,
                                         terrain_params=terrain_params,
                                         building_plans=building_plans + special_plans,
                                         city_radius=city_layout.radius,
-                                        parking_lot_specs=parking_lot_specs)
+                                        parking_lot_specs=parking_lot_specs,
+                                        river=city_layout.river, park_specs=park_specs)
 
     sign_placements = signage.plan_signage(street_graph, preset, seed=seed, terrain_params=terrain_params,
                                             building_plans=building_plans + special_plans,
                                             prop_placements=prop_placements)
+    if city_layout.river is not None:
+        # Signs stand on the ground next to the road; on a bridge or the
+        # bank there is no ground at that height, so drop those.
+        river = city_layout.river
+        sign_placements = [p for p in sign_placements
+                           if not river.contains(p.location[0], p.location[1], river.bank_margin)]
     return CityPlan(city_layout, zone_by_block, street_graph, building_plans, special_plans,
-                    prop_placements, sign_placements, parking_lot_specs)
+                    prop_placements, sign_placements, parking_lot_specs, park_specs)
 
 
 def generate_city(preset, terrain_params=None, seed=None, parent_collection=None, progress=None):
@@ -95,7 +110,8 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     sign_placements = plan.sign_placements
     parking_lot_specs = plan.parking_lot_specs
 
-    _flatten_terrain_under_buildings(terrain_params, building_plans + special_plans, street_graph, preset)
+    _flatten_terrain_under_buildings(terrain_params, building_plans + special_plans, street_graph, preset,
+                                     river=city_layout.river)
 
     if parent_collection is None:
         parent_collection = bpy.context.scene.collection
@@ -105,9 +121,14 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     props_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Props", root)
     signage_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Signage", root)
     parking_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Parking", root)
+    water_coll = _get_or_create_collection(f"{CITY_ROOT_COLLECTION_NAME}_Water", root)
 
     report(0.15, "streets")
     street_objects = streets.build_street_meshes(street_graph, preset, terrain_params, collection=streets_coll)
+    water_objects = water.build_water_mesh(city_layout.river, terrain_params, collection=water_coll)
+    water_objects += water.build_bridges(street_graph, city_layout.river, preset, terrain_params,
+                                         collection=water_coll)
+    park_objects = parks.build_park_surfaces(plan.park_specs, terrain_params, collection=props_coll)
     report(0.25, "buildings")
     building_objects, building_extra_objects = buildings.build_building_meshes(
         building_plans, terrain_params, collection=buildings_coll)
@@ -143,10 +164,14 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
         "prop_objects": prop_objects,
         "sign_objects": sign_objects,
         "parking_objects": parking_objects,
+        "water_objects": water_objects,
+        "park_objects": park_objects,
+        "park_specs": plan.park_specs,
+        "river": city_layout.river,
     }
 
 
-def _flatten_terrain_under_buildings(terrain_params, plans, street_graph=None, preset=None):
+def _flatten_terrain_under_buildings(terrain_params, plans, street_graph=None, preset=None, river=None):
     """Reshape the visible terrain mesh so every building's flat foundation
     sits flush on the ground, using the exact same base_z formula
     buildings.build_building_meshes uses (footprint-centroid height
@@ -171,11 +196,11 @@ def _flatten_terrain_under_buildings(terrain_params, plans, street_graph=None, p
     terrain_gen.reset_terrain_heights(terrain_obj, terrain_params)
 
     footprints_with_target_z = []
-    for plan in plans:
-        cx = sum(p[0] for p in plan.footprint) / len(plan.footprint)
-        cy = sum(p[1] for p in plan.footprint) / len(plan.footprint)
+    for footprint in (plan.footprint for plan in plans):
+        cx = sum(p[0] for p in footprint) / len(footprint)
+        cy = sum(p[1] for p in footprint) / len(footprint)
         base_z = terrain_gen.sample_world_height(cx, cy, terrain_params)
-        footprints_with_target_z.append((plan.footprint, base_z))
+        footprints_with_target_z.append((footprint, base_z))
     if footprints_with_target_z:
         terrain_gen.flatten_terrain_for_footprints(terrain_obj, terrain_params, footprints_with_target_z,
                                                     margin=global_settings.TERRAIN_FLATTEN_MARGIN)
@@ -185,6 +210,11 @@ def _flatten_terrain_under_buildings(terrain_params, plans, street_graph=None, p
         terrain_gen.lower_terrain_under_corridors(
             terrain_obj, terrain_params,
             streets.road_corridors(street_graph, preset), streets.node_corridor_discs(street_graph, preset))
+    if river is not None:
+        # The riverbed: deeper than a road bed, with the bank as the blend.
+        terrain_gen.lower_terrain_under_corridors(
+            terrain_obj, terrain_params, river.corridors(), (),
+            depth=water.RIVER_DEPTH, margin=river.bank_margin, shallow_depth=water.RIVER_DEPTH, shoulder=0.0)
 
 
 def clear_city():

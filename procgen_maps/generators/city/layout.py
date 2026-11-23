@@ -16,7 +16,7 @@ buildings.py turn this data into meshes.
 """
 import math
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -58,10 +58,42 @@ class StreetSegment:
 
 
 @dataclass
+class RiverSpec:
+    """A river running north-south through one column of the street grid:
+    a meandering centerline polyline (in increasing y), the water's half
+    width and the width of the sloped bank outside it. The column is
+    bounded by two streets on either side, so the river never touches a
+    lot; the cross streets that span the column are its bridges."""
+    points: List[Tuple[float, float]]
+    half_width: float
+    bank_margin: float
+    x_range: Tuple[float, float] = (0.0, 0.0)   # the street lines bounding the river column
+
+    def distance(self, x: float, y: float) -> float:
+        best = math.inf
+        for (ax, ay), (bx, by) in zip(self.points, self.points[1:]):
+            dx, dy = bx - ax, by - ay
+            length_sq = dx * dx + dy * dy
+            t = 0.0 if length_sq <= 1e-12 else max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / length_sq))
+            best = min(best, math.hypot(x - (ax + t * dx), y - (ay + t * dy)))
+        return best
+
+    def contains(self, x: float, y: float, extra: float = 0.0) -> bool:
+        """Inside the water (plus `extra` meters, e.g. the bank)."""
+        return self.distance(x, y) < self.half_width + extra
+
+    def corridors(self, extra: float = 0.0):
+        """(ax, ay, bx, by, half_width) per centerline piece, for
+        terrain.lower_terrain_under_corridors."""
+        return [(a[0], a[1], b[0], b[1], self.half_width + extra) for a, b in zip(self.points, self.points[1:])]
+
+
+@dataclass
 class CityLayout:
     blocks: List[Block] = field(default_factory=list)
     streets: List[StreetSegment] = field(default_factory=list)
     radius: float = 0.0
+    river: Optional[RiverSpec] = None
 
 
 def generate_layout(preset, seed=None) -> CityLayout:
@@ -72,6 +104,49 @@ def generate_layout(preset, seed=None) -> CityLayout:
     return _generate_raster_layout(preset, rng_seed)
 
 
+_RIVER_MIN_HALF_SPACE = 4.0     # meters of free half-column needed before a river is laid at all
+_RIVER_BRIDGE_EVERY = 2         # every Nth cross street spans the river; the others stop at the banks
+_RIVER_MEANDER_PERIOD = 140.0   # meters per full meander wave
+
+
+def plan_river(rng, xs: List[float], y_lo: float, y_hi: float, preset) -> Tuple[Optional[RiverSpec], int]:
+    """Pick the river column (the widest of the middle third of the x
+    lines) and lay the meandering centerline through it, keeping water
+    plus bank clear of the streets on both sides (their half width, the
+    sidewalk and a meter of ground). Returns (river or None, column
+    index or -1). Pure Python, unit-tested."""
+    from .setback import SIDEWALK_WIDTH
+
+    if getattr(preset, "water", "river") != "river" or len(xs) < 4:
+        return None, -1
+    clearance = preset.street_width_arterial / 2.0 + SIDEWALK_WIDTH + 1.0
+    n = len(xs) - 1
+    lo, hi = n // 3, max(n // 3 + 1, (2 * n) // 3)
+    candidates = list(range(lo, hi))
+    widths = [xs[i + 1] - xs[i] for i in candidates]
+    best = max(widths)
+    column = candidates[widths.index(best)]
+    # Among equally wide columns the first wins; jitter the choice with the
+    # rng so different seeds put the river in different columns.
+    wide = [c for c, w in zip(candidates, widths) if w >= best - 1e-6]
+    column = wide[int(rng.integers(0, len(wide)))]
+    avail = (xs[column + 1] - xs[column]) / 2.0 - clearance
+    if avail < _RIVER_MIN_HALF_SPACE:
+        return None, -1
+    half_width = avail * 0.5
+    bank = avail * 0.3
+    amplitude = avail * 0.2
+    mid = (xs[column] + xs[column + 1]) / 2.0
+    phase = float(rng.uniform(0.0, math.tau))
+    points = []
+    y = y_lo
+    while y < y_hi:
+        points.append((mid + amplitude * math.sin(math.tau * y / _RIVER_MEANDER_PERIOD + phase), y))
+        y += 8.0
+    points.append((mid + amplitude * math.sin(math.tau * y_hi / _RIVER_MEANDER_PERIOD + phase), y_hi))
+    return RiverSpec(points, half_width, bank, (xs[column], xs[column + 1])), column
+
+
 def _generate_grid_layout(preset, seed) -> CityLayout:
     rng = np.random.default_rng(seed)
     n = max(2, int((preset.radius * 2) / preset.block_size))
@@ -79,25 +154,31 @@ def _generate_grid_layout(preset, seed) -> CityLayout:
     jitter = preset.block_size * 0.08
 
     centers_axis = [(-half_extent + preset.block_size * (i + 0.5)) for i in range(n)]
+    line_positions = [-half_extent + preset.block_size * k for k in range(n + 1)]
+    river, river_column = plan_river(rng, line_positions, -half_extent - 20.0, half_extent + 20.0, preset)
 
     blocks: List[Block] = []
     block_id = 0
     for cy in centers_axis:
-        for cx in centers_axis:
+        for column, cx in enumerate(centers_axis):
+            if column == river_column:
+                continue
             jx = cx + rng.uniform(-jitter, jitter)
             jy = cy + rng.uniform(-jitter, jitter)
             half = (preset.block_size * _FILL_FACTOR) / 2.0
             blocks.append(Block(id=block_id, center=(jx, jy), half_size=(half, half)))
             block_id += 1
 
-    streets = _grid_street_segments(n, half_extent, preset)
-    return CityLayout(blocks=blocks, streets=streets, radius=preset.radius)
+    streets = _grid_street_segments(n, half_extent, preset, river_column=river_column)
+    return CityLayout(blocks=blocks, streets=streets, radius=preset.radius, river=river)
 
 
-def _grid_street_segments(n, half_extent, preset) -> List[StreetSegment]:
+def _grid_street_segments(n, half_extent, preset, river_column=-1) -> List[StreetSegment]:
     """Build the full grid of streets, split at every crossing point so each
     interior intersection becomes a real shared graph node (degree 3/4) -
-    streets.build_street_meshes uses node degree to place intersection fans."""
+    streets.build_street_meshes uses node degree to place intersection fans.
+    Across the river column only every _RIVER_BRIDGE_EVERY-th cross street
+    is kept (as a bridge); the network stays connected through them."""
     streets: List[StreetSegment] = []
     seg_id = 0
     line_positions = [-half_extent + preset.block_size * k for k in range(n + 1)]
@@ -111,6 +192,8 @@ def _grid_street_segments(n, half_extent, preset) -> List[StreetSegment]:
     for k, y in enumerate(line_positions):
         street_class = "arterial" if k % _ARTERIAL_EVERY_N == 0 else "local"
         for i in range(n):
+            if i == river_column and k % _RIVER_BRIDGE_EVERY != 0:
+                continue
             streets.append(StreetSegment(seg_id, (line_positions[i], y), (line_positions[i + 1], y), street_class))
             seg_id += 1
 
@@ -150,13 +233,19 @@ def _generate_raster_layout(preset, seed) -> CityLayout:
         width = preset.street_width_arterial if line_class(index) == "arterial" else preset.street_width_local
         return width / 2.0 + SIDEWALK_WIDTH + SETBACK_MARGIN
 
+    river, river_column = plan_river(rng, xs, ys[0] - 20.0, ys[-1] + 20.0, preset)
+
     kept = set()
+    water = set()
     for i in range(n_x):
         for j in range(n_y):
             cx = (xs[i] + xs[i + 1]) / 2.0
             cy = (ys[j] + ys[j + 1]) / 2.0
             if math.hypot(cx, cy) <= radius:
-                kept.add((i, j))
+                if i == river_column:
+                    water.add((i, j))   # keeps its streets (banks + bridges), gets no lot
+                else:
+                    kept.add((i, j))
 
     # Merge some lots with a kept, still-free right-hand or upper neighbour.
     owner = {}
@@ -191,12 +280,13 @@ def _generate_raster_layout(preset, seed) -> CityLayout:
     streets: List[StreetSegment] = []
 
     def wanted(cell_a, cell_b):
-        """A grid-line piece exists where at least one side is a kept lot,
-        and is removed where both sides belong to one merged block."""
-        in_a, in_b = cell_a in owner, cell_b in owner
+        """A grid-line piece exists where at least one side is a kept lot
+        (or water), and is removed where both sides belong to one merged
+        block."""
+        in_a, in_b = cell_a in owner or cell_a in water, cell_b in owner or cell_b in water
         if not (in_a or in_b):
             return False
-        return not (in_a and in_b and owner[cell_a] == owner[cell_b])
+        return not (cell_a in owner and cell_b in owner and owner[cell_a] == owner[cell_b])
 
     for i in range(n_x + 1):
         for j in range(n_y):
@@ -204,10 +294,12 @@ def _generate_raster_layout(preset, seed) -> CityLayout:
                 streets.append(StreetSegment(len(streets), (xs[i], ys[j]), (xs[i], ys[j + 1]), line_class(i)))
     for j in range(n_y + 1):
         for i in range(n_x):
+            if i == river_column and j % _RIVER_BRIDGE_EVERY != 0:
+                continue   # only every other cross street bridges the river
             if wanted((i, j - 1), (i, j)):
                 streets.append(StreetSegment(len(streets), (xs[i], ys[j]), (xs[i + 1], ys[j]), line_class(j)))
 
-    return CityLayout(blocks=blocks, streets=streets, radius=radius)
+    return CityLayout(blocks=blocks, streets=streets, radius=radius, river=river)
 
 
 def _irregular_lines(rng, radius: float, block_size: float) -> List[float]:

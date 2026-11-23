@@ -27,6 +27,7 @@ class PROCGEN_PT_main_panel(bpy.types.Panel):
         col.prop(settings, "enable_parks")
         col.prop(settings, "enable_commercial")
         col.prop(settings, "enable_cars")
+        col.prop(settings, "enable_water")
 
         layout.separator()
         layout.operator("procgen_maps.generate_all", icon='PLAY')

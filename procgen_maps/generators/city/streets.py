@@ -32,7 +32,7 @@ from .layout import StreetSegment
 from .setback import SIDEWALK_WIDTH
 
 _SNAP_TOLERANCE = 0.5  # meters; merges near-identical endpoints from overlapping block-perimeter segments
-_MAX_ROAD_SEGMENT_LENGTH = 6.0   # meters; strips are chopped into chunks this size at most so they follow the terrain (see _build_road_strip)
+_MAX_ROAD_SEGMENT_LENGTH = 3.0   # meters; strips are chopped into chunks this size at most so they follow the terrain (see _build_road_strip)
 
 STREETS_PREFIX = "ProcgenMaps_Street"
 STREET_NETWORK_OBJECT_NAME = f"{STREETS_PREFIX}_Network"
@@ -42,6 +42,7 @@ ROAD_LANES_ATTRIBUTE = "procgen_maps_road_lanes"   # per-face float: 1 = local, 
 CURB_HEIGHT = 0.12            # meters the sidewalk surface sits above the asphalt
 ROAD_LIFT = 0.05              # meters above terrain, avoids z-fighting with the ground
 FAN_LIFT = 0.01               # meters an intersection fan sits above the strips it covers (coplanar = z-fighting)
+SIDEWALK_SKIRT = 0.6          # meters the sidewalk's outer edge extends down into the ground (hides the road-bed step)
 _SIDEWALK_MIN_LENGTH = 1.0    # meters; shorter leftover sidewalk pieces (tiny blocks) are skipped
 
 
@@ -394,19 +395,23 @@ def _build_road_strip(data, start, end, width, height_at, crosswalk_ends=(False,
                 inner = point_at(along, inner_across)
                 outer = point_at(along, outer_across)
                 inner_z = height_at(*inner)
+                outer_z = height_at(*outer) + CURB_HEIGHT
                 rows.append((
                     data.add_vert((inner[0], inner[1], inner_z), (along, inner_across), no_ends),                 # curb foot
                     data.add_vert((inner[0], inner[1], inner_z + CURB_HEIGHT), (along, inner_across), no_ends),   # curb top
-                    data.add_vert((outer[0], outer[1], height_at(*outer) + CURB_HEIGHT), (along, outer_across), no_ends),
+                    data.add_vert((outer[0], outer[1], outer_z), (along, outer_across), no_ends),
+                    data.add_vert((outer[0], outer[1], outer_z - SIDEWALK_SKIRT), (along, outer_across), no_ends),  # skirt foot
                 ))
             for i in range(walk_segments):
-                (f0, t0, o0), (f1, t1, o1) = rows[i], rows[i + 1]
+                (f0, t0, o0, s0), (f1, t1, o1, s1) = rows[i], rows[i + 1]
                 if side > 0:
                     data.add_face((f0, f1, t1, t0), 1)   # curb face, facing the road
                     data.add_face((t0, t1, o1, o0), 1)   # sidewalk top
+                    data.add_face((o0, o1, s1, s0), 1)   # outer skirt, facing away from the road
                 else:
                     data.add_face((f1, f0, t0, t1), 1)
                     data.add_face((t1, t0, o0, o1), 1)
+                    data.add_face((o1, o0, s0, s1), 1)
 
 
 def _build_node_mesh(data, center, radius, outgoing, height_at, with_fan=True, sides=8):
@@ -431,15 +436,18 @@ def _build_node_mesh(data, center, radius, outgoing, height_at, with_fan=True, s
             data.add_face((hub, rim[i], rim[(i + 1) % sides]), 0)
 
     for inner_path, outer_path in corner_sidewalk_paths(center, outgoing, radius):
-        feet, tops, outers = [], [], []
+        feet, tops, outers, skirts = [], [], [], []
         for (ix, iy), (ox, oy) in zip(inner_path, outer_path):
             inner_z = height_at(ix, iy)
             feet.append(data.add_vert((ix, iy, inner_z), (ix - cx, iy - cy), no_ends))
             tops.append(data.add_vert((ix, iy, inner_z + CURB_HEIGHT), (ix - cx, iy - cy), no_ends))
             if outers and abs(data.verts[outers[-1]][0] - ox) < 1e-6 and abs(data.verts[outers[-1]][1] - oy) < 1e-6:
                 outers.append(outers[-1])   # equal-width crossing: outer corner coincides with the strip ends
+                skirts.append(skirts[-1])
             else:
-                outers.append(data.add_vert((ox, oy, height_at(ox, oy) + CURB_HEIGHT), (ox - cx, oy - cy), no_ends))
+                outer_z = height_at(ox, oy) + CURB_HEIGHT
+                outers.append(data.add_vert((ox, oy, outer_z), (ox - cx, oy - cy), no_ends))
+                skirts.append(data.add_vert((ox, oy, outer_z - SIDEWALK_SKIRT), (ox - cx, oy - cy), no_ends))
         for k in range(len(inner_path) - 1):
             if inner_path[k] != inner_path[k + 1]:
                 data.add_face((feet[k], feet[k + 1], tops[k + 1], tops[k]), 1)     # curb, facing the road
@@ -450,3 +458,5 @@ def _build_node_mesh(data, center, radius, outgoing, height_at, with_fan=True, s
                     unique.append(v)
             if len(unique) >= 3:
                 data.add_face(unique, 1)                                             # slab top
+            if outers[k] != outers[k + 1]:
+                data.add_face((outers[k + 1], outers[k], skirts[k], skirts[k + 1]), 1)   # outer skirt

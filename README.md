@@ -33,9 +33,21 @@ and exports them to common interchange formats. Targets Blender 4.2+
   commercial, apartment slab/tower, townhouse, cottage, shopfront, warehouse,
   factory hall, industrial tower, mixed use), extruded floor-by-floor with
   bmesh, with real window columns on every floor, parapet-walled flat
-  roofs or gabled tile roofs (own roof material), and a shared facade
-  shader with ground-level grime, rain streaks, floor-slab lines and
-  roughness variation on top of the per-building color/tint.
+  roofs, gabled or hipped tile roofs, sawtooth roofs on factory halls,
+  water tanks and antenna masts on tall flat roofs, balcony ribbons on
+  the residential types, awnings and sign boards over shop entrances,
+  and a shared facade shader with ground-level grime, rain streaks,
+  floor-slab lines and roughness variation on top of the per-building
+  color/tint.
+- **Parks and plazas**: park blocks get a cross of paved paths, a
+  fountain, benches along the paths, lamps and trees on the lawn; some
+  smaller ones become paved plazas with benches and rim trees
+  (`procgen_maps/generators/city/parks.py`).
+- **River with bridges** (`procgen_maps/generators/city/water.py`): one
+  meandering river runs through a column of the street grid, the terrain
+  is sunk into a riverbed with sloped banks, every other cross street
+  spans it on a bridge (deck, railings, pier) and nothing is ever planned
+  in the water - the validator checks it. Toggle in the panel.
 - **5 special buildings** (supermarket, police station, hospital, fire
   station, school), placed by explicit zone/size selection rather than the
   random facade pick, each with an illuminated sign and, for hospitals, a
@@ -53,9 +65,12 @@ and exports them to common interchange formats. Targets Blender 4.2+
 - **Instance-Collection-based prop instancing** with distance-based LOD, so
   placing thousands of props costs lightweight Empties, not thousands of
   independent meshes.
-- **Night mode**: emissive building windows plus real point lights at every
-  street lamp, toggled from the panel - also dips the procedural sky's sun
-  below the horizon.
+- **Night mode**: lit windows that read as apartments, office floors and
+  dark floors - whole runs of panes on one floor are lit or dark together,
+  warm (residential) or cool (office) - plus real point lights at every
+  street lamp, toggled from the panel; also dips the procedural sky's sun
+  below the horizon. The per-pane values are mesh attributes, so one
+  shared window material lights the whole city.
 - **Lighting panel**: lighting presets (Afternoon, Midday, Golden Hour,
   Soft Overcast) that set sun elevation/rotation, sky strength and film
   exposure together, plus live-tunable sun fields, day/night exposure, a
@@ -74,7 +89,8 @@ and exports them to common interchange formats. Targets Blender 4.2+
   dice button next to the seed field.
 - **Validate Map**: one click checks the generated map for overlaps
   (buildings, roads, props, signs, parking lots), disconnected streets,
-  terrain poking through a street surface,
+  terrain poking through a street surface, buildings/props/signs in the
+  river or on its banks, a river without a bridge, trees on park paths,
   floating or buried objects and orphan datablocks, and shows the summary
   in the panel (full report in the system console). The same validator
   runs in the test suite over 50 seeds x 4 presets
@@ -110,8 +126,8 @@ details.
    seed.
 3. Click **Generate Terrain**, **Generate City**, and/or **Generate
    Dungeon** - each is independent and can be run on its own.
-4. Toggle **Night Mode** to switch on emissive windows and street lamp
-   lights.
+4. Toggle **Night Mode** to switch on the lit windows and street lamp
+   lights; **River** (on by default) runs a bridged river through the city.
 5. Open the **Export** sub-panel to write glTF, FBX, USDZ, SVG, or JSON
    output to the configured export directory.
 6. **Validate Map** checks the result for placement problems; regenerating

@@ -23,7 +23,7 @@ PROPS_COLLECTION_NAME = "ProcgenMaps_Props"
 
 _LAMP_SPACING = 25.0
 _TREE_STREET_SPACING = 18.0
-_PARK_TREE_DENSITY = 0.02        # trees per square meter of park block area
+_PARK_TREE_DENSITY = 0.035       # trees per square meter of park block area
 _CAR_SPACING = 10.0
 _SIGN_CHANCE_AT_SHOPFRONT = 0.6
 _PARK_FOUNTAIN_MIN_AREA = 400.0  # sq meters; smaller parks get benches/trees only, no centerpiece
@@ -51,7 +51,7 @@ class PropPlacement:
 
 def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int, str],
                 preset, seed=None, terrain_params=None, building_plans: List[BuildingPlan] = None,
-                city_radius: float = None, parking_lot_specs=None) -> List[PropPlacement]:
+                city_radius: float = None, parking_lot_specs=None, river=None, park_specs=None) -> List[PropPlacement]:
     """Compute collision-free placement points for all prop categories.
 
     If `city_radius` is given, a forest ring is scattered outside it (see
@@ -90,6 +90,8 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
             return 0.0
         return terrain_gen.sample_world_height(x, y, terrain_params)
 
+    park_by_block = {spec.block_id: spec for spec in (park_specs or [])}
+
     def try_place(asset_id, x, y, rotation_z=0.0, scale=1.0):
         # The footprint grows with the instance scale (forest trees are up
         # to 1.6x) - checking the unscaled radius let big trees overlap.
@@ -97,6 +99,11 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         if grid.has_collision(x, y, radius):
             return False
         if any(x0 < x < x1 and y0 < y < y1 for (x0, y0, x1, y1) in lot_rects):
+            return False
+        # Nothing grows in the river or on its sloped banks; lamps and
+        # cars on a bridge are fine (they stand on the deck's sidewalk).
+        if river is not None and asset_id not in ("street_lamp", "parked_car") and \
+                river.contains(x, y, river.bank_margin + radius):
             return False
         grid.insert(asset_id, x, y, radius)
         placements.append(PropPlacement(asset_id, (x, y, height_at(x, y)), rotation_z, scale))
@@ -158,6 +165,7 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         hw, hh = block.half_size
 
         if zone == "park":
+            park = park_by_block.get(block.id)
             if block.area >= _PARK_FOUNTAIN_MIN_AREA:
                 try_place("fountain", cx, cy)
 
@@ -168,15 +176,38 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
             hw, hh = setback.shrink_footprint_for_setback(
                 block.center, block.half_size, setback.roads_near(block.center, block.half_size, roads),
                 min_half_size=1.0)
+            # A plaza is paved: a few trees along its rim only; a park keeps
+            # its trees off the paths (parks.py lays a cross through the centre).
             n_trees = max(1, int(block.area * _PARK_TREE_DENSITY * density))
-            for _ in range(n_trees):
-                x, y = cx + rng.uniform(-hw, hw), cy + rng.uniform(-hh, hh)
-                try_place(rng.choice(tree_ids), x, y, rotation_z=rng.uniform(0, math.tau), scale=rng.uniform(0.85, 1.15))
+            if park is not None and park.kind == "plaza":
+                n_trees = max(1, n_trees // 4)
+            placed_trees = 0
+            for _ in range(n_trees * 3):   # retries: the path cross and the benches reject a share of candidates
+                if placed_trees >= n_trees:
+                    break
+                if park is not None and park.kind == "plaza":
+                    x = cx + rng.choice((-1.0, 1.0)) * (hw - 1.5)
+                    y = cy + rng.uniform(-hh + 1.5, hh - 1.5)
+                else:
+                    x, y = cx + rng.uniform(-hw, hw), cy + rng.uniform(-hh, hh)
+                if park is not None and park.kind == "park" and park.on_paving(x, y, 1.2):
+                    continue
+                if try_place(rng.choice(tree_ids), x, y, rotation_z=rng.uniform(0, math.tau), scale=rng.uniform(0.85, 1.15)):
+                    placed_trees += 1
 
             n_benches = max(0, int((block.area ** 0.5) / 15.0 * density))
-            for _ in range(n_benches):
-                x, y = cx + rng.uniform(-hw * 0.6, hw * 0.6), cy + rng.uniform(-hh * 0.6, hh * 0.6)
-                try_place("bench", x, y, rotation_z=rng.uniform(0, math.tau))
+            if park is not None:
+                from .parks import bench_spots
+                n_benches = max(2, n_benches * 2)
+                for x, y, rotation_z in bench_spots(park, rng, n_benches):
+                    try_place("bench", x, y, rotation_z=rotation_z)
+                # A lamp at each path end / plaza corner: parks are lit at night too.
+                for sx, sy in ((-1.0, -1.0), (1.0, 1.0)):
+                    try_place("street_lamp", cx + sx * (hw - 0.8), cy + sy * (hh - 0.8))
+            else:
+                for _ in range(n_benches):
+                    x, y = cx + rng.uniform(-hw * 0.6, hw * 0.6), cy + rng.uniform(-hh * 0.6, hh * 0.6)
+                    try_place("bench", x, y, rotation_z=rng.uniform(0, math.tau))
 
         elif zone == "commercial" and rng.random() < _SIGN_CHANCE_AT_SHOPFRONT * density:
             # At the block's road-cleared edge (see the park case above), not
@@ -193,8 +224,14 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         rim = city_radius * _FOREST_RING_START - 2.0 * (preset.street_width_arterial + SIDEWALK_WIDTH)
         rim_roads = [road for road in roads
                      if max(math.hypot(road[0], road[1]), math.hypot(road[2], road[3])) >= rim]
+        park_rects = [spec.rect for spec in park_by_block.values()]
         for x, y, scale, rotation_z in plan_forest_ring(city_radius, rng):
             if setback.road_clearance((x, y, x, y), rim_roads) < SIDEWALK_WIDTH:
+                continue
+            # The ring starts just outside the city circle, which the
+            # outermost blocks can still reach: no wild trees on a rim
+            # park's paths or plaza.
+            if any(x0 - 1.0 < x < x1 + 1.0 and y0 - 1.0 < y < y1 + 1.0 for (x0, y0, x1, y1) in park_rects):
                 continue
             try_place(rng.choice(tree_ids), x, y, rotation_z=rotation_z, scale=scale)
 

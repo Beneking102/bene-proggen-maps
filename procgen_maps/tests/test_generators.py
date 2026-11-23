@@ -966,7 +966,9 @@ def test_lower_terrain_under_corridors_sinks_the_road_bed_once():
     # Two corridors crossing at the origin plus a disc there.
     inside = terrain_gen.lower_terrain_under_corridors(
         obj, params, [(-20.0, 0.0, 20.0, 0.0, 3.0), (0.0, -20.0, 0.0, 20.0, 3.0)], [(0.0, 0.0, 4.0)],
-        depth=0.4, margin=2.0)
+        # The plain v0.12 profile (no sidewalk shoulder); the shoulder is
+        # covered by test_city_visuals.py.
+        depth=0.4, margin=2.0, shallow_depth=0.4, shoulder=0.0)
     assert inside > 0
     after = obj.data.vertices._coords.reshape(res, res, 3)[..., 2]
     assert after[center, center] == pytest.approx(-0.4)          # crossing: lowered once, not twice

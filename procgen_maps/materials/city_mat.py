@@ -26,6 +26,14 @@ both pure shading tricks, no extra geometry or texture files needed.
 CITY_MATERIAL_NAME = "ProcgenMaps_CityFacade"
 WINDOW_MATERIAL_NAME = "ProcgenMaps_CityWindow"
 ROOF_MATERIAL_NAME = "ProcgenMaps_CityRoof"
+TRIM_MATERIAL_NAME = "ProcgenMaps_CityTrim"
+AWNING_MATERIAL_NAME = "ProcgenMaps_CityAwning"
+# Names of the per-face float attributes generators/city/buildings.py writes
+# (kept in sync with its WINDOW_LIT_ATTRIBUTE / WINDOW_WARM_ATTRIBUTE).
+WINDOW_LIT_ATTRIBUTE = "procgen_maps_window_lit"
+WINDOW_WARM_ATTRIBUTE = "procgen_maps_window_warm"
+WINDOW_LIGHT_WARM = (1.0, 0.76, 0.42, 1.0)   # incandescent apartment light
+WINDOW_LIGHT_COOL = (0.72, 0.84, 1.0, 1.0)   # fluorescent office light
 NIGHT_MODE_NODE_NAME = "ProcgenMaps_NightModeFactor"
 NIGHT_PULSE_NODE_NAME = "ProcgenMaps_NightPulseTime"
 _NIGHT_PULSE_SPEED = 0.045       # radians/frame fed into the pulse sine, independent of set_night_mode's own value
@@ -453,8 +461,111 @@ def get_or_create_window_material():
     emission_strength.operation = 'MULTIPLY'
     links.new(night_value.outputs["Value"], emission_strength.inputs[0])
     links.new(pulse_factor.outputs["Result"], emission_strength.inputs[1])
-    links.new(emission_strength.outputs["Value"], bsdf.inputs["Emission Strength"])
 
+    # Per-pane night lighting (v0.13): generators/city/buildings.py writes
+    # two per-face float attributes on every building mesh - how brightly
+    # a pane glows (0 = a dark flat, lit apartments/office bands are
+    # contiguous runs of panes on one floor) and how warm its light is.
+    # Panes without the attribute (older meshes) read 0 and stay dark.
+    lit_attr = nodes.new("ShaderNodeAttribute")
+    lit_attr.location = (-100, -650)
+    lit_attr.attribute_type = 'GEOMETRY'
+    lit_attr.attribute_name = WINDOW_LIT_ATTRIBUTE
+    lit_strength = nodes.new("ShaderNodeMath")
+    lit_strength.location = (300, -300)
+    lit_strength.operation = 'MULTIPLY'
+    links.new(emission_strength.outputs["Value"], lit_strength.inputs[0])
+    links.new(lit_attr.outputs["Fac"], lit_strength.inputs[1])
+    links.new(lit_strength.outputs["Value"], bsdf.inputs["Emission Strength"])
+
+    warm_attr = nodes.new("ShaderNodeAttribute")
+    warm_attr.location = (-100, -800)
+    warm_attr.attribute_type = 'GEOMETRY'
+    warm_attr.attribute_name = WINDOW_WARM_ATTRIBUTE
+    light_color = nodes.new("ShaderNodeMix")
+    light_color.location = (100, -800)
+    light_color.data_type = 'RGBA'
+    light_color.inputs[6].default_value = WINDOW_LIGHT_COOL
+    light_color.inputs[7].default_value = WINDOW_LIGHT_WARM
+    links.new(warm_attr.outputs["Fac"], light_color.inputs[0])
+    links.new(light_color.outputs[2], bsdf.inputs["Emission Color"])
+
+    atmosphere.apply_haze(mat)
+    return mat
+
+
+def get_or_create_trim_material():
+    """Mesh slot 3 on every building: balcony railings, rooftop gear and
+    other dark metal trim - one flat, slightly metallic grey shared by all."""
+    import bpy
+
+    from . import atmosphere
+
+    existing = bpy.data.materials.get(TRIM_MATERIAL_NAME)
+    if existing is not None:
+        return existing
+    mat = bpy.data.materials.new(TRIM_MATERIAL_NAME)
+    mat.diffuse_color = (0.18, 0.18, 0.2, 1.0)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (300, 0)
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.inputs["Base Color"].default_value = (0.16, 0.16, 0.18, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.45
+    bsdf.inputs["Metallic"].default_value = 0.6
+    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+    atmosphere.apply_haze(mat)
+    return mat
+
+
+_AWNING_COLORS = (
+    (0.75, 0.12, 0.10, 1.0),   # red
+    (0.10, 0.35, 0.22, 1.0),   # green
+    (0.12, 0.22, 0.55, 1.0),   # blue
+    (0.85, 0.55, 0.10, 1.0),   # orange
+    (0.55, 0.12, 0.40, 1.0),   # plum
+    (0.90, 0.85, 0.70, 1.0),   # cream
+)
+
+
+def get_or_create_awning_material():
+    """Mesh slot 4: shop awnings and sign boards. One material, a palette
+    picked per building through Object Info > Random (buildings are
+    separate objects), so a shopping street gets mixed colors for free."""
+    import bpy
+
+    from . import atmosphere
+
+    existing = bpy.data.materials.get(AWNING_MATERIAL_NAME)
+    if existing is not None:
+        return existing
+    mat = bpy.data.materials.new(AWNING_MATERIAL_NAME)
+    mat.diffuse_color = _AWNING_COLORS[0]
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (400, 0)
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (100, 0)
+    bsdf.inputs["Roughness"].default_value = 0.7
+    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+    info = nodes.new("ShaderNodeObjectInfo")
+    info.location = (-500, 0)
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-300, 0)
+    ramp.color_ramp.interpolation = 'CONSTANT'
+    elements = ramp.color_ramp.elements
+    elements[0].position = 0.0
+    elements[0].color = _AWNING_COLORS[0]
+    for index, color in enumerate(_AWNING_COLORS[1:], start=1):
+        elements.new(index / len(_AWNING_COLORS)).color = color
+    links.new(info.outputs["Random"], ramp.inputs["Fac"])
+    links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
     atmosphere.apply_haze(mat)
     return mat
 

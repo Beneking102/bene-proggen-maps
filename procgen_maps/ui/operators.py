@@ -70,6 +70,7 @@ def _apply_toggle_overrides(preset, settings):
         preset,
         cars_enabled=settings.enable_cars and preset.cars_enabled,
         zone_ratios=zone_ratios,
+        water=preset.water if settings.enable_water else "none",
     )
 
 

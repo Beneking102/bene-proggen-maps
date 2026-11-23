@@ -6,7 +6,86 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.12.0 — Terrain stays under the roads, closed sidewalk corners, one street object (current)
+## v0.13.0 — Night windows that read as homes, balconies and shops, parks, a river with bridges (current)
+
+The visuals release. Every change here is in the planning half first and
+pinned by pure-Python tests (`tests/test_city_visuals.py`), the meshes
+follow; `pytest` (217 tests), the headless smoke test and the 50-seed
+fuzz validator stay green with the new rules included.
+
+**Night windows.** v0.10's night was every carved pane glowing the same
+warm color, which with the frequency-driven window pattern made a
+random checkerboard. Now the lighting is planned per floor and per face:
+a floor is *dark*, a *band* (an office floor lit wall to wall, cool
+fluorescent) or *mixed* (apartments of 2-3 neighbouring bays that are
+lit or dark together, mostly warm, a few cool); industrial floors glow
+dimly or not at all; entrances are always lit. The result goes into two
+per-face float attributes on the building mesh
+(`procgen_maps_window_lit` / `_warm`) that the one shared window
+material reads with Attribute nodes - no extra materials, no per-window
+objects. (`plan_floor_lighting` / `window_lighting` in
+`generators/city/buildings.py`.)
+
+**Facades and roofs.** Apartment slabs/towers and mixed-use blocks get
+balcony ribbons (slab + railing, on the front or front and back, every
+floor or every other one); shopfronts, mixed-use and brick commercial
+get a sloped awning and a sign board over the entrance, in one of six
+colors picked per building through Object Info > Random. Townhouses and
+cottages sometimes get a hip roof instead of the gable, factory halls
+mostly a sawtooth roof with north-light glazing, and flat roofs of six
+floors and more a water tank and/or an antenna mast in a corner. All of
+it is plain boxes added to the building's own bmesh (no operator calls)
+or two new instanced props, so the cost is small (OPTIMIZATION.md).
+
+**Parks and plazas.** Park blocks were a fountain and a few trees on raw
+grass. Now each one is either a park with a cross of paved paths through
+the centre, benches facing the paths, a lamp at two corners and trees
+kept off the paving, or (30% of the smaller ones) a paved plaza with
+benches and trees along its rim. The paving is one mesh in the sidewalk
+material, chunked to follow the ground, and the validator checks that
+no tree stands on a path.
+
+**River.** One meandering river runs north-south through the widest
+column of the middle third of the street grid. The cells in that column
+get no lots but keep their streets, so the river is always flanked by a
+street on each side and never touches a building; every second cross
+street in the column is kept and becomes a bridge (deck slab, railings,
+a pier into the riverbed), the others stop at the banks, and the street
+graph stays one component by construction. The terrain is sunk 2.6 m
+under the water with the bank as the blend, the water surface follows
+the heightfield 1.2 m down. Props and signs keep off the water and the
+banks (lamps and cars may stand on a bridge), and `validate_city_plan`
+now has `building_in_water`, `prop_in_water`, `sign_in_water` and
+`river_without_bridge` rules - 0 issues over the fuzz set. A **River**
+toggle in the panel turns it off (`preset.water = "none"` gives exactly
+the v0.12 layout). A lake option did not make it.
+
+**The lip.** The v0.12 renders had a dark step along the outside of
+every sidewalk: the terrain was sunk 0.5 m under the whole corridor,
+sidewalks included, and climbed back over 2.5 m - a trench beside every
+curb. The bed is now 0.7 m under the asphalt, rises to 0.2 m across the
+sidewalk and blends out over 1.5 m (`terrain.corridor_profile`), the
+sidewalk's outer edge has a 0.6 m skirt down into the ground, and road
+chunks are 3 m instead of 6 m so a strip hugs the ground more closely.
+Remaining: a handful of 1-2 cm terrain-through-asphalt vertices in the
+Metropole seed 12 scene check (the asphalt itself, not the sidewalk; the
+pure validator reports 0).
+
+**Before/after - Kleinstadt, seed 4, night, the same kind of close-up (v0.12.0 left: every pane the same warm glow; v0.13.0 right: lit and dark apartments, an office band, dark floors, balconies, a rooftop tank):**
+![Night windows before and after](docs/progression/v0.13.0-night-before-after.png)
+
+**Metropole, seed 12 - the river between two bank streets, a bridge with railings and pier, sloped banks:**
+![River and bridge](docs/progression/v0.13.0-river-bridge.png)
+
+**Kleinstadt, seed 4 - a park block: path cross, fountain, benches, lamps, trees off the paving:**
+![Park](docs/progression/v0.13.0-park.png)
+
+**Kleinstadt, seed 4 - street level: a shopfront with awning and sign board, the sidewalk meeting the ground without the trench:**
+![Street level](docs/progression/v0.13.0-street-shopfront.png)
+
+---
+
+## v0.12.0 — Terrain stays under the roads, closed sidewalk corners, one street object
 
 **The bug first.** Every v0.11.0 render had green terrain blotches
 poking through the asphalt at crossings and along the roads (look at the

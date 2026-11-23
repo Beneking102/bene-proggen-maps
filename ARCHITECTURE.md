@@ -118,13 +118,36 @@ CityPreset
   -> special_buildings.plan_special_buildings / buildings.plan_buildings
                                    (BuildingPlan[]; both take the StreetGraph and
                                     pull footprints back from the roads via setback.py)
-  -> props.plan_props              (PropPlacement[]; + forest ring outside layout.radius)
-  -> signage.plan_signage          (SignPlacement[])
+  -> parks.plan_parks              (ParkSpec[]: park with a path cross, or plaza)
+  -> props.plan_props              (PropPlacement[]; + forest ring outside layout.radius;
+                                    keeps off the river/banks and the park paths)
+  -> signage.plan_signage          (SignPlacement[]; none on the river/banks)
   -> streets.build_street_meshes   -> ONE street-network object (asphalt + sidewalk/curb
-                                      + fans + corner pieces, 2 UV maps, per-face attrs)
-  -> buildings.build_building_meshes -> building mesh objects (3 material slots)
+                                      + skirt + fans + corner pieces, 2 UV maps, per-face attrs)
+  -> water.build_water_mesh / build_bridges -> water strip + one bridges object
+  -> parks.build_park_surfaces     -> one paths/plazas object (sidewalk paving material)
+  -> buildings.build_building_meshes -> building mesh objects (5 material slots)
   -> props.build_props             -> prop Empty objects
 ```
+
+`layout.generate_layout` also plans the **river** (`plan_river` ->
+`RiverSpec`): the widest column of the middle third of the x street lines
+gets a meandering centerline, its cells get no lots but keep their
+streets, and only every second cross street inside the column is kept -
+those are the bridges (`water.bridge_edges`), so the street graph stays
+one component. Water plus bank keep clear of the two bounding streets by
+construction. `preset.water` ("river"/"none"; the panel's River toggle
+sets "none") turns it off.
+
+Buildings' night lighting is planned per floor and per face in
+`buildings.plan_floor_lighting` / `window_lighting` (pure Python): a
+floor is dark, a lit band (offices) or a mix of lit/dark apartments
+(runs of 2-3 bays), warm or cool. `_carve_floor_windows` writes the
+result into two per-face float layers that end up as mesh attributes
+(`procgen_maps_window_lit` / `_warm`); the shared window material reads
+them with Attribute nodes in GEOMETRY mode. Roof shape
+(`pick_roof_shape`: flat / gable / hip / sawtooth), balcony ribbons and
+shop awnings are drawn from the same per-building `detail_rng` streams.
 
 `layout.py`'s "grid" mode is a jittered regular lattice; "raster" mode
 (Metropole, Industrial) is an irregular grid - uneven line spacing,
@@ -139,7 +162,10 @@ If `terrain_params` is passed in, `build_street_meshes` and
 `build_building_meshes` call `terrain.sample_world_height` per point/
 footprint so streets and buildings sit on the terrain surface, and the
 terrain mesh itself is reshaped to agree with them: flattened under
-every building footprint and sunk 0.5 m under every street corridor
+every building footprint, sunk under every street corridor (0.7 m under
+the asphalt, rising to 0.2 m at the sidewalk's outer edge - see
+`terrain.corridor_profile`; the sidewalk's own skirt hides the step) and
+sunk 2.6 m under the river with the bank as the blend
 (`terrain.flatten_terrain_for_footprints`, `lower_terrain_under_corridors`).
 
 **Materials** are all shared, parametrized node setups created once by a
@@ -192,7 +218,10 @@ Scene Collection
                                        nested inside it)
     ├─ ProcgenMaps_City_Streets
     ├─ ProcgenMaps_City_Buildings
-    └─ ProcgenMaps_City_Props
+    ├─ ProcgenMaps_City_Props         (props + the ProcgenMaps_Parks paths/plazas object)
+    ├─ ProcgenMaps_City_Signage
+    ├─ ProcgenMaps_City_Parking
+    └─ ProcgenMaps_City_Water         (ProcgenMaps_Water, ProcgenMaps_Bridges)
 ```
 
 Object name prefixes:
@@ -230,6 +259,9 @@ read back with `obj.get("key")`):
 | `procgen_maps_block_id` | building objects | originating `Block.id`, for traceability back to the layout |
 | `procgen_maps_base_z`, `procgen_maps_floor_height` | building objects | ground height and floor pitch, read by the facade shader's grime band and floor-slab lines |
 | `procgen_maps_roof_index` | building objects | 0 = flat gravel roof, 1-3 = tile colors for gabled roofs (`city_mat.py`'s roof ramp) |
+| `procgen_maps_center_x`, `procgen_maps_center_y` | building objects | where `base_z` was sampled (the footprint centroid; balconies/awnings shift the bounding box), read by `validate_scene` |
+| `procgen_maps_window_lit`, `procgen_maps_window_warm` | per-face float *mesh attributes* on building meshes | night glow 0..1 and warm/cool 0..1 per window pane (0 on every non-window face), read by the window material's Attribute nodes |
+| `procgen_maps_water`, `procgen_maps_bridges`, `procgen_maps_parks` | the water / bridges / parks objects | marker properties (kind, bridge count, park count) |
 | `procgen_maps_street_class` | the street-network object | `"network"` (marks it for validation's ground-contact check); `procgen_maps_street_edges` / `_nodes` carry the graph size |
 | `procgen_maps_road_width`, `procgen_maps_road_lanes` | per-face float *mesh attributes* on the street-network object | meters / 1 (local) or 2 (arterial), 0 on sidewalks and fans; drive the asphalt shader's marking layout (Attribute node, GEOMETRY mode) |
 | `procgen_maps_asset_id` | prop Empties | which `assets/library.py` entry this instance is, e.g. `"street_lamp"` - also used to find lamps for Night Mode's point lights |
@@ -246,6 +278,9 @@ read back with `obj.get("key")`):
   `test_validation.py` is the fuzz layer: `plan_city` + `validate_city_plan`
   over every preset and a dozen seeds (0 and 2^31-1 included), plus
   determinism and the regression tests behind each validator rule.
+  `test_city_visuals.py` covers the v0.13 planning: night-window runs,
+  roof shapes, parks/plazas, the river (bridges, connectivity, no lots in
+  water, the validator rules) and the road-bed profile.
 - `procgen_maps/tests/blender_integration/run_smoke_tests.py`: a separate
   headless-Blender script that exercises the bpy-dependent "build" half
   (mesh building, material node setup, collection linking, the exporters)

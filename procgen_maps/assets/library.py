@@ -59,6 +59,15 @@ def _rooftop_unit_builder(detail: str):
     return {"kind": "rooftop_unit", "width": 1.6, "depth": 1.2, "height": 0.9}
 
 
+def _rooftop_tank_builder(detail: str):
+    return {"kind": "rooftop_tank", "radius": 1.1, "height": 2.2, "leg_height": 1.0,
+            "segments": _SEGMENTS_BY_DETAIL[detail]}
+
+
+def _antenna_mast_builder(detail: str):
+    return {"kind": "antenna_mast", "radius": 0.08, "height": 7.0, "segments": max(4, _SEGMENTS_BY_DETAIL[detail] // 2)}
+
+
 def _fountain_builder(detail: str):
     return {"kind": "fountain", "base_radius": 2.2, "base_height": 0.5,
             "pillar_radius": 0.35, "pillar_height": 1.6, "segments": _SEGMENTS_BY_DETAIL[detail]}
@@ -121,6 +130,8 @@ ASSET_DEFS["parked_car"] = AssetDef("parked_car", "car", footprint_radius=2.4, b
 ASSET_DEFS["sign"] = AssetDef("sign", "sign", footprint_radius=0.5, builder=_sign_builder)
 ASSET_DEFS["rooftop_unit"] = AssetDef("rooftop_unit", "rooftop", footprint_radius=1.0, builder=_rooftop_unit_builder)
 ASSET_DEFS["fountain"] = AssetDef("fountain", "landmark", footprint_radius=2.6, builder=_fountain_builder)
+ASSET_DEFS["rooftop_tank"] = AssetDef("rooftop_tank", "rooftop", footprint_radius=1.2, builder=_rooftop_tank_builder)
+ASSET_DEFS["antenna_mast"] = AssetDef("antenna_mast", "rooftop", footprint_radius=0.3, builder=_antenna_mast_builder)
 
 ASSET_DEFS["furniture_bed"] = AssetDef("furniture_bed", "furniture", footprint_radius=1.2, builder=_bed_builder)
 ASSET_DEFS["furniture_table"] = AssetDef("furniture_table", "furniture", footprint_radius=0.8, builder=_table_builder)
