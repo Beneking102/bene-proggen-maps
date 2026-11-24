@@ -6,7 +6,79 @@ messages. Presets/seeds are noted so any image can be reproduced exactly.
 
 ---
 
-## v0.14.0 — World, dungeon, game export (current)
+## v0.15.0 — Polish and release (current)
+
+The release that makes the map look like a place. v0.14's country road
+ran through a pale beige plain that ended in a cliff against a grey
+void; v0.15 gives the city a countryside, hides the map's edge, tidies
+the UI, adds custom presets, audits every module and ships a README,
+changelog, release zip and showcase media. `pytest` (257 tests), the
+headless smoke test (now also checking the landscape attributes, the
+horizon, the custom-preset round trip and that the GLB leaves the
+horizon out) and the 50-seed x 4-preset fuzz validator are green.
+
+**Landscape** (`generators/landscape.py`, pure numpy). Outside the city
+the ground is a jittered-grid Voronoi of ~85 m field cells, each with a
+random tone the terrain shader maps to meadow greens, a dark crop,
+ripening barley, golden stubble or ploughed earth; a random 60% of the
+cell borders carry a hedgerow (a dark 5 m band in the shader, trees
+every few metres along it); the forest ring is multiplied by a
+low-frequency clump mask so the trees stand in woods, with the humus
+floor only under the dense cores. One function set feeds both the
+shader - the terrain operator writes the masks as per-vertex attributes
+(`procgen_maps_field`, `_field_tone`, `_hedge`, `_forest`), rewritten on
+a city-only regenerate for the city's seed - and the prop planner, so
+ground and vegetation agree exactly. The horizon: a skirt from the
+terrain's edge loop slopes 160 m down into a flat far ground 8 km out
+(`ProcgenMaps_Horizon`, terrain material, kept out of framing, stats,
+SVG and the game export), the aerial-perspective haze is now
+scene-referred bright (`HAZE_BRIGHTNESS`; it used to fade everything to
+a *dark* grey-blue, which was the "void"), and the sky's below-horizon
+band is painted in the same tone, so land, haze and sky meet. The day
+exposure went from -2.4 to -2.7 EV and the ground palette darker and
+more saturated - under the physical sky, anything paler renders beige.
+Country roads got a grass verge in the terrain material that slopes
+from the asphalt edge down into the ground (the v0.14 vertical asphalt
+skirt read as a floating road with a black outline); the validator
+skips the verge faces when it checks the terrain against the road
+surfaces.
+
+**UI/UX.** Sub-panels per concern (Generate, Lighting, Custom Presets,
+Showcase Render, Export, Validate & Stats), a tooltip on every property,
+a last-message line under Generate All, a timed line per stage in the
+console, and `_safe_execute` around every operator: an unexpected error
+is one clean message (traceback in the console), never a popup
+traceback. Custom presets (`config/user_presets.py`): the whole panel
+state as a JSON file in `bpy.utils.user_resource('CONFIG')/procgen_maps/
+presets`, save / load / delete / open-folder buttons, tested in pure
+Python and in the smoke test.
+
+**Audit.** 83 docstrings added to public functions and classes, two
+unused imports removed, the horizon excluded everywhere it would have
+leaked (showcase bounds, SVG, stats, GLB), `package_release.py` takes an
+output directory, and the forest-ring test was rewritten for the clumped
+forest (density per area inside vs. outside 1.5 x radius).
+
+All v0.15 stills are 1280x720 Cycles CPU previews (8-12 samples +
+denoise) taken from the look tests and the flyover's own frames - the
+planned 1920x1080 golden-hour and night hero stills were not rendered in
+time and are the first item for v0.15.1.
+
+**Kleinstadt, seed 4 - the city in its countryside (frame 1 of the flyover, the README hero):**
+![Countryside](docs/progression/v0.15.0-hero-countryside.png)
+
+**Kleinstadt, seed 4 - the country road and village, the same view as v0.14's (compare below):**
+![Country road](docs/progression/v0.15.0-country-road.png)
+
+**Metropole, seed 12 - overview with the field patchwork around it:**
+![Metropole overview](docs/progression/v0.15.0-metropole-overview.png)
+
+**Flyover** (Kleinstadt, seed 4, 10 s, 240 frames at 24 fps, 1280x720, Cycles CPU 12 samples + denoise, 6.5 MB H.264): [v0.15.0-flyover.mp4](docs/progression/v0.15.0-flyover.mp4)
+![Flyover frame 120](docs/progression/v0.15.0-flyover-frame.png)
+
+---
+
+## v0.14.0 — World, dungeon, game export
 
 The "what is it for" release: the generated map now goes into a game
 engine as something a character can walk on, the dungeon is a dungeon

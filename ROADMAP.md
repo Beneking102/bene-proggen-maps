@@ -53,7 +53,7 @@ entry with renders. Order and scope may shift, but the themes are fixed.
   beyond park benches/lamps this round.
 - [ ] Metropole under 4 s (carried over from v0.12; see OPTIMIZATION.md).
 
-## v0.14 - World, dungeon, game export (this release)
+## v0.14 - World, dungeon, game export (shipped)
 
 - [x] Game-engine glTF export (`exporters/game_export.py`): a
   City/Terrain/Dungeon hierarchy, box colliders for buildings and props
@@ -78,9 +78,27 @@ entry with renders. Order and scope may shift, but the themes are fixed.
   hull colliders (boxes only), a lake, more than one country road.
 - [ ] Metropole under 4 s (carried over; see OPTIMIZATION.md).
 
-## v0.15 - Polish and release
+## v0.15 - Polish and release (this release)
 
-- UI/UX pass, save/load custom presets, tooltips everywhere.
-- Final audit and code review of every module, updated docs, release zip
-  and release notes.
-- Showcase: hero images and a short flyover video.
+- [x] Landscape: field patchwork with hedgerows, woods in clumps with
+  their floor under the trees, a horizon skirt instead of a cliff
+  against a grey void, scene-referred haze, grass verges on country
+  roads (`generators/landscape.py`, terrain attributes).
+- [x] UI/UX pass: sub-panels per concern, tooltips on every property,
+  a last-message line, timed console stages, clean error reports.
+- [x] Custom presets saved/loaded as JSON in the user config folder.
+- [x] Audit: docstrings on every public function/class, unused code and
+  imports removed, new regression tests, smoke test extended.
+- [x] Release: README overhaul with hero image, CHANGELOG.md, release
+  zip script, release-notes draft; hero stills and a flyover video.
+- [ ] Not done: Metropole under 4 s (the woods and hedgerows add ~3-5 k
+  tree instances; a Geometry Nodes scatter would make them free - see
+  OPTIMIZATION.md), MSFT_lod, convex colliders, a lake.
+
+## Later
+
+- Props via Geometry Nodes instancing (forest, hedgerows, street trees)
+  and per-block building meshes - the two items that would halve the
+  Metropole's generate time.
+- A lake option, more than one country road, roads between villages.
+- Interior floors for more building types; more special buildings.

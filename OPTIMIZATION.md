@@ -1,5 +1,24 @@
 # Optimization
 
+## v0.15.0 note: the countryside costs tree instances
+
+v0.15 is a visuals/polish release and adds no new speed-ups; it does
+add the woods and hedgerows (`generators/landscape.py`), which are
+plain prop instances (one Empty each) like the v0.10 forest ring, only
+far more of them: a Kleinstadt now plants ~3,500 wild trees (5,500
+props in total, v0.14: 1,837), a Metropole ~5,000 (capped by
+`props._FOREST_MAX_TREES` candidates and `landscape.HEDGE_TREE_KEEP`).
+Measured headless on the usual machine while other renders were running
+(so treat these as upper bounds): Kleinstadt terrain + city 4.1-4.3 s
+(v0.14: 1.9 s), Metropole ~11 s (v0.14: ~5.6 s). The per-vertex
+landscape attributes themselves are one numpy pass (~0.1 s on a 512^2
+grid), the horizon skirt is ~6k vertices, the shader change is free. The
+fix is the one already on the roadmap for street trees and props: a
+Geometry Nodes scatter / instancer for the wild trees would make the
+whole forest one object and drop the city build back under v0.14's
+numbers - it is the next optimisation item together with the per-block
+building builder below.
+
 ## v0.13.0 profile (headless Blender 5.2, idle priority, 8 threads, seed 42)
 
 Same method and machine as the v0.12.0 table below, second of two runs.

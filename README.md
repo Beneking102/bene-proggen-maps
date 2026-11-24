@@ -2,164 +2,158 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
 
-A Blender addon that procedurally generates cities, terrain, and dungeons,
-and exports them to common interchange formats. Targets Blender 4.2+
-(tested headless on 4.5 LTS in CI and 5.2 LTS locally).
+![Kleinstadt, seed 4 - the city in its countryside: fields, hedgerows, woods, a village on the country road](docs/progression/v0.15.0-hero-countryside.png)
 
-## Features
+**Procgen Maps** is a Blender add-on that generates a whole map in a few
+seconds: a city with streets, buildings, parks, a river and its bridges,
+sitting on a terrain with fields, hedgerows and woods around it - plus a
+separate multi-level dungeon - and exports it as a game-ready glTF
+(colliders, LODs, walkable ground), FBX, USDZ, a 2D SVG map or JSON.
+Everything is procedural (no texture or model files), deterministic per
+seed, and runs headless as well as in the editor. Targets Blender 4.2+
+(tested on 4.5 LTS in CI and 5.2 LTS locally).
 
-- **4 city archetype presets** (`procgen_maps/config/presets.py`): Metropole,
-  Kleinstadt, Dorf, Industrial - each tuning radius, block size, layout mode,
-  building height range, zone mix, street widths, prop density and more.
-- **Procedural terrain**: an FBM (fractal Brownian motion) noise heightmap,
-  sampled consistently so streets and buildings can follow terrain height
-  without ray-casting; a slope/height-driven grass-rock shader with dry
-  patches, and a thinning forest ring outside the city so it blends into
-  the landscape instead of ending in a hard line.
-- **Full city generation pipeline**: layout (regular grid, or an irregular
-  grid with merged lots for the "raster" presets - always one connected
-  street network with real intersections) -> zone classification -> street
-  network -> building setbacks -> buildings -> props, each stage a separate,
-  independently testable module.
-- **Streets with sidewalks and markings**: the whole network is one mesh
-  object - every road is an asphalt strip plus a raised curb/sidewalk on
-  both sides, with corner pieces at every crossing and bend, and the
-  terrain is sunk beneath every street so no ground shows through; a single shared procedural
-  shader paints dashed or double center lines, lane dividers, edge lines,
-  zebra crossings at intersections, paint wear and paving joints from
-  meter-scaled UVs - no texture files. Parked cars sit in the kerbside
-  lane, lamps and trees on the sidewalk.
-- **12 procedural building facade types** (glass tower, office block, brick
-  commercial, apartment slab/tower, townhouse, cottage, shopfront, warehouse,
-  factory hall, industrial tower, mixed use), extruded floor-by-floor with
-  bmesh, with real window columns on every floor, parapet-walled flat
-  roofs, gabled or hipped tile roofs, sawtooth roofs on factory halls,
-  water tanks and antenna masts on tall flat roofs, balcony ribbons on
-  the residential types, awnings and sign boards over shop entrances,
-  and a shared facade shader with ground-level grime, rain streaks,
-  floor-slab lines and roughness variation on top of the per-building
-  color/tint.
-- **Parks and plazas**: park blocks get a cross of paved paths, a
-  fountain, benches along the paths, lamps and trees on the lawn; some
-  smaller ones become paved plazas with benches and rim trees
-  (`procgen_maps/generators/city/parks.py`).
-- **River with bridges** (`procgen_maps/generators/city/water.py`): one
-  meandering river runs through a column of the street grid, the terrain
-  is sunk into a riverbed with sloped banks, every other cross street
-  spans it on a bridge (deck, railings, pier) and nothing is ever planned
-  in the water - the validator checks it. Toggle in the panel.
-- **5 special buildings** (supermarket, police station, hospital, fire
-  station, school), placed by explicit zone/size selection rather than the
-  random facade pick, each with an illuminated sign and, for hospitals, a
-  rooftop helipad (`procgen_maps/generators/city/special_buildings.py`).
-- **Street signage**: stop signs, speed-limit signs, and street-name
-  signs placed by rule-based logic (intersection degree + street
-  hierarchy, not random density), each a bespoke mesh+text object
-  (`procgen_maps/generators/city/signage.py`).
-- **Separate BSP dungeon generator**, independent of the city/terrain
-  pipeline - rooms and corridors from binary space partitioning, on two
-  (up to four) stacked levels joined by staircases, in a crypt, cave or
-  castle theme with doors, theme props, wall torches and a soft fill
-  light per room (`procgen_maps/generators/dungeon.py`).
-- **Countryside**: a country road leaves the city to the map edge with
-  a small village of cottages along it, and the terrain shader turns
-  from city grass to a drier meadow band, a dark forest floor under the
-  tree ring, rock on slopes and snow on the highest peaks
-  (`generators/city/countryside.py`, `materials/terrain_mat.py`).
-- **Procedural placeholder props**: 12 tree variants, a street lamp, a
-  bench, a parked car, and a sign, all built from primitive geometry.
-  Real 3D asset modeling is explicitly out of scope for this codebase (see
-  `procgen_maps/assets/library.py`).
-- **Instance-Collection-based prop instancing** with distance-based LOD, so
-  placing thousands of props costs lightweight Empties, not thousands of
-  independent meshes.
-- **Night mode**: lit windows that read as apartments, office floors and
-  dark floors - whole runs of panes on one floor are lit or dark together,
-  warm (residential) or cool (office) - plus real point lights at every
-  street lamp, toggled from the panel; also dips the procedural sky's sun
-  below the horizon. The per-pane values are mesh attributes, so one
-  shared window material lights the whole city.
-- **Lighting panel**: lighting presets (Afternoon, Midday, Golden Hour,
-  Soft Overcast) that set sun elevation/rotation, sky strength and film
-  exposure together, plus live-tunable sun fields, day/night exposure, a
-  haze (aerial perspective) slider, window night-glow strength and street
-  lamp energy, each applying immediately (no regenerate needed).
-- **Procedural sky + atmosphere**: a physical sky world (Nishita on 4.x,
-  multiple-scattering on 5.x; no HDRI file needed), AgX color management,
-  and a shared aerial-perspective node group that fades every material
-  toward the sky color with distance (warm for a low sun).
-- **Render Showcase Image**: one-click auto-framed render - computes a
-  camera placement from whatever's been generated (`procgen_maps/rendering/`),
-  sets up day/night sun position and renders with Cycles on the CPU
-  (denoised, sample count in the panel) straight to the export directory -
-  works identically in the editor, headless and on CI.
-- **Generate All / Randomize Seed**: one button for terrain + city, and a
-  dice button next to the seed field.
-- **Validate Map**: one click checks the generated map for overlaps
-  (buildings, roads, props, signs, parking lots), disconnected streets,
-  terrain poking through a street surface, buildings/props/signs in the
-  river or on its banks, a river without a bridge, trees on park paths,
-  floating or buried objects and orphan datablocks, and shows the summary
-  in the panel (full report in the system console). The same validator
-  runs in the test suite over 50 seeds x 4 presets
-  (`procgen_maps/validation.py`).
-- **Dungeon halls**: large BSP rooms get pillar grids, the boss room a
-  central dais, and the stone materials noise grain and bump.
-- **Game-engine export**: the glTF/GLB export writes a City / Terrain /
-  Dungeon hierarchy with readable names, box colliders for every
-  building and prop plus trimesh colliders for ground, streets, bridges
-  and dungeon rooms (Godot `-col`/`-colonly`/`-navmesh` or Unity `_col`
-  naming), `_LOD0`/`_LOD1` groups for buildings and prop instances, and
-  a navmesh-friendly walkable ground / dungeon floor mesh - toggled in
-  the Export panel, and the Blender scene is left untouched
-  (`procgen_maps/exporters/game_export.py`). Also FBX, USDZ, a top-down
-  SVG map, and a JSON stats sidecar.
-- **N-panel UI** under `View3D > Sidebar > Procgen Maps`, with a profiler
-  readout (object/vertex/face counts, last generate time).
+| | |
+|---|---|
+| ![Metropole overview](docs/progression/v0.15.0-metropole-overview.png) | ![Country road](docs/progression/v0.15.0-country-road.png) |
 
-No scipy dependency anywhere - it isn't bundled with Blender's Python.
-Block partitioning, spatial queries and nearest-neighbor lookups all use
-numpy and Blender's own `mathutils` instead. See `ARCHITECTURE.md` for
-details.
+A 10 s flyover: [docs/progression/v0.15.0-flyover.mp4](docs/progression/v0.15.0-flyover.mp4).
+The full visual history, version by version, is in [`PROGRESSION.md`](PROGRESSION.md).
+
+## What it generates
+
+**City.** Four archetype presets (Metropole, Kleinstadt, Dorf,
+Industrial) drive a pipeline of pure-Python planning stages - layout
+(jittered grid or irregular raster, always one connected street network)
+-> zones -> street graph -> setbacks -> buildings -> parks -> props ->
+signage - followed by thin Blender build steps:
+
+- **Streets**: one mesh for the whole network; asphalt with procedural
+  markings (dashed/double centre lines, lane dividers, zebra crossings,
+  wear), raised sidewalks with curbs and corner pieces, intersection
+  fans, parked cars in the kerbside lane, lamps and trees on the
+  sidewalk. The terrain is sunk under every street so no ground pokes
+  through.
+- **Buildings**: 12 facade archetypes (glass tower, office block, brick
+  commercial, apartment slab/tower, townhouse, cottage, shopfront,
+  warehouse, factory hall, industrial tower, mixed use) extruded floor by
+  floor with real window columns, balconies, awnings and sign boards,
+  flat / gabled / hipped / sawtooth roofs with tanks and masts, furnished
+  ground floors behind transmissive glass, and a shared weathered facade
+  shader. Five special buildings (supermarket with parking lot, police
+  station, hospital with helipad, fire station, school) with lit signs.
+- **Night mode**: lit windows that read as apartments and office floors
+  (warm/cool, dark floors, contiguous runs), point lights on every lamp,
+  the sun dipped below the horizon - one toggle, no regenerate.
+- **Parks and plazas**, a **river** with sloped banks and bridges, and
+  **street signage** (stop, speed limit, street names) from rule-based
+  placement.
+
+**Countryside.** A country road leaves the city to the map edge past a
+village of cottages. The ground outside the city is a patchwork of field
+cells in their own tones (meadow, crop, barley, stubble, ploughed earth)
+with hedgerows and trees along the field borders, woods in clumps with a
+humus floor under the trees, rock on slopes and snow on real peaks; the
+map ends in a horizon that fades into the haze instead of a cliff.
+
+**Dungeon.** A BSP dungeon on up to four stacked levels joined by
+staircases, in a crypt, cave or castle theme: doors with lintels,
+pillared halls, a boss dais, sarcophagi / boulders / banners, wall
+torches and a fill light per room.
+
+**Rendering.** A procedural physical sky (no HDRI), AgX colour
+management, one shared aerial-perspective node group, lighting presets
+(Afternoon, Midday, Golden Hour, Soft Overcast) with live sun / exposure
+/ haze sliders, a one-click auto-framed **Showcase Render** (Cycles CPU,
+denoised) and an interior view through a building's entrance.
+
+**Export.** glTF/GLB with a City / Terrain / Dungeon hierarchy, box
+colliders for buildings and props, trimesh colliders for ground, streets,
+bridges and dungeon rooms, `_LOD0`/`_LOD1` groups and a navmesh-friendly
+walkable mesh, in Godot (`-col`, `-colonly`, `-navmesh`) or Unity (`_col`,
+`Collision` group) naming - the Blender scene is left untouched. Also
+FBX, USDZ, a top-down SVG map and a JSON stats sidecar.
+
+**Quality.** **Validate Map** checks a generated map for overlaps,
+props or signs on the asphalt, disconnected streets, terrain above a
+road surface, anything in the river, floating or buried objects and
+orphan datablocks. The same validator runs in the test suite over 50
+seeds x 4 presets, the dungeon's over 50 seeds x 3 themes; every bug fix
+has a regression test. Custom presets save the whole panel state as JSON.
 
 ## Installation
 
-1. Get the code: clone this repository, or download a release zip built by
-   `procgen_maps/scripts/package_release.py` from the project's Releases page.
-2. If you cloned instead of using a release zip, zip the `procgen_maps/`
-   folder itself (the zip must contain `procgen_maps/__init__.py` at its
-   top level, not nested one level deeper).
-3. In Blender: **Edit > Preferences > Add-ons > Install from Disk...**, and
-   select the zip.
-4. Enable the **Procgen Maps** checkbox in the add-on list.
+1. Download the release zip (`procgen_maps-vX.Y.Z.zip`) from the Releases
+   page, or build one from a clone with
+   `python procgen_maps/scripts/package_release.py` (writes `dist/`).
+   If you zip by hand, zip the `procgen_maps/` folder itself so the
+   archive contains `procgen_maps/__init__.py` at its top level.
+2. In Blender: **Edit > Preferences > Add-ons > Install from Disk...** and
+   pick the zip.
+3. Enable **Procgen Maps** in the add-on list.
 
-## Quick Start
+No extra Python packages are needed: the add-on uses only `numpy` (bundled
+with Blender) and Blender's own `bpy` / `bmesh` / `mathutils` - no scipy,
+on purpose.
 
-1. Open the sidebar in the 3D Viewport (press `N`) and select the
-   **Procgen Maps** tab.
-2. Pick a city preset (Metropole / Kleinstadt / Dorf / Industrial) and a
-   seed.
-3. Click **Generate Terrain**, **Generate City**, and/or **Generate
-   Dungeon** - each is independent and can be run on its own.
-4. Toggle **Night Mode** to switch on the lit windows and street lamp
-   lights; **River** (on by default) runs a bridged river through the city.
-   The dungeon's theme and level count sit under its button.
-5. Open the **Export** sub-panel to write glTF, FBX, USDZ, SVG, or JSON
-   output to the configured export directory; the *Game Engine* box
-   picks Godot or Unity naming and toggles colliders, LODs and the
-   walkable ground for the glTF export.
-6. **Validate Map** checks the result for placement problems; regenerating
-   the city on an existing terrain is safe (the terrain is re-leveled
-   before the new buildings' pads are flattened in).
+## Quick start
 
-## Contributing
+1. Press `N` in the 3D Viewport and open the **Procgen Maps** tab.
+2. Pick a preset and a seed (the dice button picks a random one).
+3. Click **Generate All**. A Kleinstadt takes a few seconds, a Metropole
+   about ten; the viewport switches to Material Preview with the scene's
+   sky so you see the real materials. The console prints one timed line
+   per stage.
+4. Try **Night Mode**, the **Lighting** presets and sliders (they apply
+   live), and **Generate Dungeon** with a theme and level count.
+5. **Showcase Render** writes an auto-framed Cycles still into the export
+   directory; **Export** writes the glTF (with the game-engine options in
+   the box), FBX, USDZ, SVG or JSON.
+6. **Validate & Stats** checks the map and shows object / vertex counts
+   and the last generate time. **Custom Presets** saves the current panel
+   state under a name and loads it back later (JSON files in Blender's
+   user config folder; the folder button opens it).
 
-See `ARCHITECTURE.md` for the module layout, registration pattern, and the
-pure-Python/bpy split convention every generator follows - read it before
-sending a pull request. `DEPLOYMENT.md` and `OPTIMIZATION.md` cover running
-headless and performance tuning, respectively. `PROGRESSION.md` tracks the
-project's visual history with screenshots/renders per version, and
-`ROADMAP.md` what the next releases are about.
+Headless use: `blender --background --python your_script.py` with
+`import procgen_maps; procgen_maps.register()` and the same
+`bpy.ops.procgen_maps.*` operators - see `DEPLOYMENT.md` and the smoke
+test in `procgen_maps/tests/blender_integration/`.
+
+## Project layout
+
+```
+procgen_maps/
+  config/        presets (the four archetypes), global settings, custom-preset files
+  generators/    terrain, landscape (fields/hedges/woods), city/ (layout, zones, streets,
+                 buildings, parks, water, props, signage, countryside, ...), dungeon
+  materials/     procedural shaders: facade, window, roof, road, sidewalk, terrain, props,
+                 dungeon, sky world, aerial perspective
+  assets/        placeholder prop meshes + instance-collection factory with LOD
+  rendering/     camera framing + showcase render
+  exporters/     game glTF, FBX, USDZ, SVG, JSON
+  ui/            property group, operators, panels
+  validation.py  the map validator (pure-Python plan checks + scene checks)
+  tests/         pytest suite (no Blender needed) + the headless smoke test
+```
+
+`ARCHITECTURE.md` explains the pure-Python / bpy split every module
+follows and the data flow between the stages; `OPTIMIZATION.md` has the
+profiles; `DEPLOYMENT.md` covers headless runs and CI; `ROADMAP.md` what
+is next; `CHANGELOG.md` what changed per version.
+
+## Development
+
+```
+pip install numpy pytest
+python -m pytest procgen_maps -q                       # ~250 tests, pure Python
+blender --background --factory-startup \
+    --python procgen_maps/tests/blender_integration/run_smoke_tests.py
+```
+
+The smoke test registers the add-on, generates terrain / city / dungeon
+twice (leak check), validates, exports every format, re-imports the GLB
+and renders two tiny Cycles frames; it exits non-zero on any failure.
+Read `ARCHITECTURE.md` before sending a pull request.
 
 ## License
 

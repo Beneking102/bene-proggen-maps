@@ -13,6 +13,20 @@
   raster scan (`generators/city/layout.py`) or `utils/spatial.py`'s
   `SpatialHashGrid` / `mathutils.kdtree` wrapper.
 
+## UI and custom presets
+
+`ui/__init__.py` holds the one `ProcgenMapsSettings` PropertyGroup
+(every property with a `description`, i.e. a tooltip; the lighting ones
+with `update=` callbacks into `ui/operators.py`), `ui/panels.py` the
+parent panel plus one sub-panel per concern, `ui/operators.py` the
+operators. Every operator's `execute` is wrapped by `_safe_execute`, which
+turns an unexpected exception into one ERROR report plus the panel's
+`last_message` line (traceback to the system console). Custom presets are
+JSON files under `bpy.utils.user_resource('CONFIG')/procgen_maps/presets`;
+`config/user_presets.py` does the settings <-> dict mapping and the file
+handling with an explicit directory argument (pure Python, tested), the
+operators only add the bpy glue.
+
 ## Registration architecture
 
 Every subpackage (`utils`, `config`, `assets`, `materials`, `generators`,
@@ -121,6 +135,26 @@ turns it into the `ProcgenMaps_Terrain` object via a single
 per-point, so other generators can query terrain height without needing
 the mesh to exist yet or ray-casting against it.
 
+**Landscape** (`generators/landscape.py`, v0.15) is the countryside's
+pure-numpy source of truth: `landscape_masks(xs, ys, city_radius, seed)`
+returns per-point field / field-tone / hedge / forest masks (a
+jittered-grid Voronoi of ~85 m field cells with a random tone each,
+hedgerows on a random subset of the cell borders, and the forest ring
+multiplied by a low-frequency fbm clump mask), `forest_density` is the
+scalar/array keep probability for forest trees, `hedgerow_points` the
+tree candidates along the hedges. The terrain operator writes the masks
+as per-vertex float attributes (`terrain.write_landscape_attributes`,
+names in `terrain.LANDSCAPE_ATTRIBUTES`) that the terrain shader reads
+with Attribute nodes; `props.plan_props` plants the woods and hedgerows
+from the same functions and `generate_city` rewrites the attributes for
+the city's seed, so the dark forest floor lies exactly under the trees.
+`terrain.build_horizon_mesh` adds the `ProcgenMaps_Horizon` object: a
+skirt from the terrain's edge loop (`terrain_edge_loop`,
+`horizon_geometry` - both pure and unit-tested) sloping down into a flat
+far ground 8 km out, in the terrain material, marked with
+`procgen_maps_horizon` so framing, stats, the SVG map and the game
+export leave it out.
+
 **City** (`generators/city/__init__.py`) is split into `plan_city` - every
 pure planning stage, returning a `CityPlan` dataclass with no bpy anywhere
 - and `generate_city`, which calls it and then builds the meshes. The
@@ -161,7 +195,11 @@ sets "none") turns it off.
 
 The **country road** (`countryside.py`) is the third street class,
 `"country"`: `streets.build_street_meshes` builds it without sidewalks
-(an asphalt skirt instead, `COUNTRY_SHOULDER` in `road_corridors`),
+but with a grass verge on both sides (material slot `VERGE_SLOT` = the
+terrain material, sloping `COUNTRY_VERGE_WIDTH` out and
+`COUNTRY_VERGE_SINK` under the heightfield so it disappears into the
+ground; `COUNTRY_SHOULDER` is the sunk-bed width in `road_corridors`,
+and `validation.terrain_above_roads` skips the verge faces),
 `props.plan_props` places no lamps/trees/cars along it, signage gives
 it a 100 km/h limit, and everything else (terrain bed, forest ring
 clearance, the validator's road rules) treats it like any road. The
@@ -209,7 +247,13 @@ Map Range nodes after every Generate Terrain),
 `dungeon_mat.py`. Every outdoor material's surface shader is routed
 through `atmosphere.py`'s single `ProcgenMaps_AerialPerspective` node
 group, so the Lighting panel's haze slider and sun presets retune the
-whole scene by editing two nodes.
+whole scene by editing two nodes. The haze emission is scaled by
+`HAZE_BRIGHTNESS` to the scene-referred brightness of the physical sky
+(the addon renders at about -2.7 EV), and `world_mat.py` paints the
+sky's below-horizon band in that same tone, so distant ground, the
+horizon skirt and the sky meet without a step. The terrain material's
+countryside comes from the landscape attributes (see above), not from
+radial bands; `set_terrain_biomes` only retunes the snow line.
 
 **Validation** (`validation.py`) follows the same split:
 `validate_city_plan(plan, preset)` checks a `CityPlan` for overlaps
@@ -278,12 +322,18 @@ Object name prefixes:
   object spawned next to a street lamp when Night Mode is enabled
   (`ui/operators.py`'s `_LAMP_LIGHT_SUFFIX`).
 
+- `ProcgenMaps_Horizon` - the horizon skirt and far ground
+  (`generators/terrain.py`'s `HORIZON_OBJECT_NAME`); carries
+  `procgen_maps_horizon = True` and is scenery, not part of the map.
+
 Custom object properties (all plain Python values stored via `obj["key"]`,
 read back with `obj.get("key")`):
 
 | Property | Set on | Purpose |
 |---|---|---|
 | `procgen_maps_seed`, `procgen_maps_world_size`, `procgen_maps_max_height` | terrain object | recorded generation parameters |
+| `procgen_maps_field`, `procgen_maps_field_tone`, `procgen_maps_hedge`, `procgen_maps_forest` | per-vertex float *mesh attributes* on the terrain | the landscape masks (field weight, field tone, hedgerow, forest density) the terrain shader reads |
+| `procgen_maps_horizon` | the horizon object | marker: leave this object out of framing, stats and exports |
 | `procgen_maps_facade_type` | building objects | facade archetype key (e.g. `"glass_tower"`), read by tooling/inspection |
 | `procgen_maps_material_index` | building objects | index into `city_mat.py`'s facade color ramp, read live by the shared material's Attribute node |
 | `procgen_maps_tint` | building objects | per-building random 0..1 value, mixed into the facade color as a +-15% brightness variation so same-facade buildings don't look identical |
@@ -306,8 +356,10 @@ read back with `obj.get("key")`):
   pure-Python "compute" half described above (`generate_heightmap`,
   `generate_layout`, `classify_zones`, `build_street_graph`,
   `plan_buildings`, `plan_props`, `SpatialHashGrid`, `pack_rects`,
-  `build_svg_document`, preset lookups, and so on) - runs in any Python
-  3.11 virtualenv with `numpy`/`pytest` installed, no Blender required.
+  `build_svg_document`, preset lookups, the landscape masks and horizon
+  geometry in `test_landscape.py`, the custom-preset files in
+  `test_user_presets.py`, and so on) - runs in any Python 3.11
+  virtualenv with `numpy`/`pytest` installed, no Blender required.
   `test_validation.py` is the fuzz layer: `plan_city` + `validate_city_plan`
   over every preset and a dozen seeds (0 and 2^31-1 included), plus
   determinism and the regression tests behind each validator rule.
