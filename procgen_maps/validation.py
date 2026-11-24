@@ -23,6 +23,7 @@ _EPSILON = 0.02
 
 @dataclass
 class ValidationIssue:
+    """One finding: a rule name, a human-readable message and (x, y) where it is."""
     kind: str          # e.g. 'building_overlap', 'prop_on_road'
     message: str
     location: Tuple[float, float] = (0.0, 0.0)
@@ -30,16 +31,20 @@ class ValidationIssue:
 
 @dataclass
 class ValidationReport:
+    """The findings of one validation run plus the counts of what was checked."""
     issues: List[ValidationIssue] = field(default_factory=list)
     checked: Dict[str, int] = field(default_factory=dict)   # kind -> how many items were examined
 
     def add(self, kind, message, location=(0.0, 0.0)):
+        """Record one issue under `rule`."""
         self.issues.append(ValidationIssue(kind, message, location))
 
     def count(self, kind: str) -> int:
+        """Number of issues recorded under `rule`."""
         return sum(1 for issue in self.issues if issue.kind == kind)
 
     def counts(self) -> Dict[str, int]:
+        """{rule: number of issues} for every rule that fired."""
         counts: Dict[str, int] = defaultdict(int)
         for issue in self.issues:
             counts[issue.kind] += 1
@@ -47,15 +52,18 @@ class ValidationReport:
 
     @property
     def ok(self) -> bool:
+        """True when no issue was recorded."""
         return not self.issues
 
     def summary(self) -> str:
+        """One line: 'OK - no issues' or the issue count per rule."""
         if not self.issues:
             return "OK - no issues"
         parts = [f"{kind}: {n}" for kind, n in sorted(self.counts().items())]
         return f"{len(self.issues)} issue(s) - " + ", ".join(parts)
 
     def format(self, max_lines: int = 40) -> str:
+        """The full multi-line report (summary, every issue, the checked counts)."""
         lines = [self.summary()]
         if self.checked:
             lines.append("checked: " + ", ".join(f"{k}={v}" for k, v in sorted(self.checked.items())))
@@ -138,10 +146,12 @@ class _RoadIndex:
                     self._cells[(cx, cy)].append(index)
 
     def near_point(self, x, y):
+        """Building rects whose expanded bounds contain (x, y) - a spatial pre-filter."""
         key = (int(math.floor(x / self.cell)), int(math.floor(y / self.cell)))
         return [self.roads[i] for i in self._cells.get(key, ())]
 
     def near_rect(self, rect):
+        """Building rects whose expanded bounds overlap the given rect - a spatial pre-filter."""
         seen = set()
         for cx in range(int(math.floor(rect[0] / self.cell)), int(math.floor(rect[2] / self.cell)) + 1):
             for cy in range(int(math.floor(rect[1] / self.cell)), int(math.floor(rect[3] / self.cell)) + 1):
@@ -209,6 +219,7 @@ def validate_city_plan(plan, preset) -> ValidationReport:
                 rect_cells[(cx, cy)].append(rect)
 
     def building_rects_near(x, y):
+        """Bucketed building bounding rects for the point / rect lookups above."""
         return rect_cells.get((int(math.floor(x / cell)), int(math.floor(y / cell))), ())
 
     # Props: inside a building, on the asphalt (cars excepted - they park
@@ -392,7 +403,7 @@ def terrain_above_roads(tolerance=0.005):
     from mathutils.bvhtree import BVHTree
 
     from .generators import terrain as terrain_gen
-    from .generators.city.streets import STREETS_PREFIX
+    from .generators.city.streets import STREETS_PREFIX, VERGE_SLOT
 
     terrain = bpy.data.objects.get(terrain_gen.TERRAIN_OBJECT_NAME)
     streets = [obj for obj in bpy.data.objects if obj.name.startswith(STREETS_PREFIX) and obj.type == 'MESH']
@@ -405,7 +416,11 @@ def terrain_above_roads(tolerance=0.005):
         matrix = obj.matrix_world
         obj_verts = [matrix @ v.co for v in mesh.vertices]
         verts.extend(obj_verts)
-        polys.extend([tuple(base + i for i in poly.vertices) for poly in mesh.polygons])
+        # A country road's grass verge (VERGE_SLOT) is ground, not road
+        # surface: it slopes from the asphalt edge down *into* the terrain
+        # on purpose, so the ground may well be above its outer edge.
+        polys.extend([tuple(base + i for i in poly.vertices) for poly in mesh.polygons
+                      if poly.material_index != VERGE_SLOT])
         xs = [v.x for v in obj_verts]
         ys = [v.y for v in obj_verts]
         boxes.append((min(xs), min(ys), max(xs), max(ys)))

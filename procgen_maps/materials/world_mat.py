@@ -11,7 +11,11 @@ WORLD_NAME = "ProcgenMaps_Sky"
 
 
 def get_or_create_sky_world(sun_elevation=0.6, sun_rotation=2.4, sun_energy=1.0):
+    """The shared procedural sky world (created once; see set_sun_position
+    / set_sun_energy for the live retuning the Lighting panel does)."""
     import bpy
+
+    from . import atmosphere
 
     existing = bpy.data.worlds.get(WORLD_NAME)
     if existing is not None:
@@ -41,7 +45,7 @@ def get_or_create_sky_world(sun_elevation=0.6, sun_rotation=2.4, sun_energy=1.0)
         # gives it the faint bounce glow a real landscape horizon has.
         sky.ground_albedo = 0.3
 
-    # Zenith lift: at the -2.4 EV the daytime presets need, the physical
+    # Zenith lift: at the -2.7 EV the daytime presets need, the physical
     # sky's zenith is ~10x darker than its horizon and renders near-black.
     # Adding a small constant (before the Background strength, so night
     # mode's 0.05 strength scales it down too) keeps it a deep blue and
@@ -74,12 +78,16 @@ def get_or_create_sky_world(sun_elevation=0.6, sun_rotation=2.4, sun_energy=1.0)
     ground.location = (-150, -200)
     ground.data_type = 'RGBA'
     ground.blend_type = 'MIX'
-    ground.inputs[7].default_value = (2.2, 2.6, 3.2, 1.0)
+    # ... the same scene-linear brightness the aerial-perspective haze
+    # fades distant ground to (atmosphere.HAZE_BRIGHTNESS x its colour), so
+    # the horizon skirt, the haze and the sky's own below-horizon band meet
+    # in one tone instead of a grey step.
+    ground.inputs[7].default_value = tuple(c * atmosphere.HAZE_BRIGHTNESS for c in atmosphere.DEFAULT_HAZE_COLOR[:3]) + (1.0,)
     links.new(below.outputs["Result"], ground.inputs[0])
     links.new(lift.outputs[2], ground.inputs[6])
     # Extra dust/aerosol gives a paler, hazier sky dome than the deep
     # ultramarine the physical model produces at the exposure the addon
-    # uses (-2.4 EV by default). dust_density is Blender 4.x's Nishita
+    # uses (-2.7 EV by default). dust_density is Blender 4.x's Nishita
     # name, aerosol_density the 5.x multiple-scattering model's.
     if hasattr(sky, "air_density"):
         sky.air_density = 1.0

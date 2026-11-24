@@ -43,12 +43,16 @@ CURB_HEIGHT = 0.12            # meters the sidewalk surface sits above the aspha
 ROAD_LIFT = 0.05              # meters above terrain, avoids z-fighting with the ground
 FAN_LIFT = 0.01               # meters an intersection fan sits above the strips it covers (coplanar = z-fighting)
 SIDEWALK_SKIRT = 0.6          # meters the sidewalk's outer edge extends down into the ground (hides the road-bed step)
-COUNTRY_SHOULDER = 0.6        # meters of sunk ground beside a country road's asphalt (no sidewalk; an asphalt skirt hides the step)
+COUNTRY_SHOULDER = 2.2        # meters of sunk ground beside a country road's asphalt (no sidewalk; the grass verge covers it)
+COUNTRY_VERGE_WIDTH = 3.0     # meters the grass verge reaches out from the asphalt edge ...
+COUNTRY_VERGE_SINK = 0.3      # ... ending this far *below* the heightfield, so it disappears into the ground
+VERGE_SLOT = 2                # material slot of the verge faces (the terrain material; validation skips them)
 _SIDEWALK_MIN_LENGTH = 1.0    # meters; shorter leftover sidewalk pieces (tiny blocks) are skipped
 
 
 @dataclass
 class StreetGraph:
+    """Nodes (points), edges (node pair + class) and per-node degree of the street network."""
     nodes: List[Tuple[float, float]] = field(default_factory=list)
     edges: List[Tuple[int, int, str]] = field(default_factory=list)  # (node_a, node_b, street_class)
     node_degree: Dict[int, int] = field(default_factory=dict)
@@ -65,6 +69,7 @@ def build_street_graph(segments: List[StreetSegment]) -> StreetGraph:
     nodes: List[Tuple[float, float]] = []
 
     def node_id(point):
+        """The node index of a point, creating the node on first use."""
         key = _snap(point)
         if key not in node_index:
             node_index[key] = len(nodes)
@@ -230,8 +235,13 @@ def build_street_meshes(graph: StreetGraph, preset, terrain_params=None, collect
             return ROAD_LIFT
         return terrain_gen.sample_world_height(x, y, terrain_params) + ROAD_LIFT
 
+    from ...materials import terrain_mat
+
     asphalt = road_mat.get_or_create_road_material()
     sidewalk = road_mat.get_or_create_sidewalk_material()
+    # Country-road verges wear the terrain material so they blend into
+    # whatever ground they lie on (it shades by world position).
+    verge = terrain_mat.get_or_create_terrain_material()
     fan_radius_by_node = node_fan_radii(graph, preset)
     data = _RoadMeshData()
 
@@ -264,9 +274,9 @@ def build_street_meshes(graph: StreetGraph, preset, terrain_params=None, collect
             continue
         outgoing = outgoing_by_node[node_index]
         if country_nodes[node_index]:
-            # A bend of the country road: the asphalt fan only, no sidewalk corners.
+            # A bend of the country road: the asphalt fan plus a verge ring, no sidewalk corners.
             _build_node_mesh(data, graph.nodes[node_index], fan_radius_by_node[node_index], [], height_at,
-                             with_fan=True)
+                             with_fan=True, verge=True)
             continue
         # A fan covers every crossing and every bend; a straight-through
         # node (two collinear edges) needs none, its strips already meet.
@@ -275,7 +285,7 @@ def build_street_meshes(graph: StreetGraph, preset, terrain_params=None, collect
         _build_node_mesh(data, graph.nodes[node_index], fan_radius_by_node[node_index], outgoing, height_at,
                          with_fan=not straight)
 
-    mesh = data.to_mesh(STREET_NETWORK_OBJECT_NAME, (asphalt, sidewalk))
+    mesh = data.to_mesh(STREET_NETWORK_OBJECT_NAME, (asphalt, sidewalk, verge))
     obj = bpy.data.objects.new(STREET_NETWORK_OBJECT_NAME, mesh)
     obj["procgen_maps_street_class"] = "network"
     obj["procgen_maps_street_edges"] = len(graph.edges)
@@ -389,21 +399,26 @@ def _build_road_strip(data, start, end, width, height_at, crosswalk_ends=(False,
 
     no_ends = (road_mat.ROAD_END_SENTINEL, road_mat.ROAD_END_SENTINEL)
     if not with_sidewalks:
-        # Country road: no sidewalk, but a skirt down from both asphalt
-        # edges so the sunk road bed never shows as a trench beside it.
+        # Country road: no sidewalk but a grass verge (terrain material,
+        # VERGE_SLOT) sloping from the asphalt edge down into the ground
+        # COUNTRY_VERGE_WIDTH out, so the sunk road bed never shows as a
+        # trench and the road's edge is a soft shoulder, not a dark drop
+        # (v0.14 had a vertical asphalt skirt there, which read as a
+        # floating road with a black outline).
         for side in (1.0, -1.0):
             edge = [ring[i][0 if side > 0 else 1] for i in range(segment_count + 1)]
             feet = []
             for i in range(segment_count + 1):
                 along = length * i / segment_count
-                px, py = point_at(along, side * half)
-                feet.append(data.add_vert((px, py, height_at(px, py) - SIDEWALK_SKIRT), (along, side * half),
-                                          no_ends))
+                across = side * (half + COUNTRY_VERGE_WIDTH)
+                px, py = point_at(along, across)
+                feet.append(data.add_vert((px, py, height_at(px, py) - ROAD_LIFT - COUNTRY_VERGE_SINK),
+                                          (along, across), no_ends))
             for i in range(segment_count):
                 if side > 0:
-                    data.add_face((edge[i], edge[i + 1], feet[i + 1], feet[i]), 0, width=0.0, lanes=0.0)
+                    data.add_face((edge[i], edge[i + 1], feet[i + 1], feet[i]), VERGE_SLOT)
                 else:
-                    data.add_face((edge[i + 1], edge[i], feet[i], feet[i + 1]), 0, width=0.0, lanes=0.0)
+                    data.add_face((edge[i + 1], edge[i], feet[i], feet[i + 1]), VERGE_SLOT)
         return
 
     # Sidewalks + curbs: material 1. No crosswalk/marking data needed (the
@@ -442,11 +457,12 @@ def _build_road_strip(data, start, end, width, height_at, crosswalk_ends=(False,
                     data.add_face((o1, o0, s0, s1), 1)
 
 
-def _build_node_mesh(data, center, radius, outgoing, height_at, with_fan=True, sides=8):
+def _build_node_mesh(data, center, radius, outgoing, height_at, with_fan=True, sides=8, verge=False):
     """Per street node: the asphalt fan (slot 0) that covers the overlapping
     strip ends, plus the sidewalk corner pieces (slot 1) from
     corner_sidewalk_paths that join the trimmed strips of the meeting
-    streets. Appends to the shared `data`."""
+    streets - or, with `verge` (a country-road bend), a grass verge ring
+    (VERGE_SLOT) around the fan instead. Appends to the shared `data`."""
     from ...materials import road_mat
 
     cx, cy = center
@@ -462,6 +478,18 @@ def _build_node_mesh(data, center, radius, outgoing, height_at, with_fan=True, s
             rim.append(data.add_vert((px, py, height_at(px, py) + FAN_LIFT), no_marks, no_ends))
         for i in range(sides):
             data.add_face((hub, rim[i], rim[(i + 1) % sides]), 0)
+        if verge:
+            outer_radius = radius + COUNTRY_VERGE_WIDTH
+            feet = []
+            for i in range(sides):
+                angle = (2 * math.pi * i) / sides
+                px = cx + outer_radius * math.cos(angle)
+                py = cy + outer_radius * math.sin(angle)
+                feet.append(data.add_vert((px, py, height_at(px, py) - ROAD_LIFT - COUNTRY_VERGE_SINK),
+                                          (px - cx, py - cy), no_ends))
+            for i in range(sides):
+                j = (i + 1) % sides
+                data.add_face((rim[i], feet[i], feet[j], rim[j]), VERGE_SLOT)
 
     for inner_path, outer_path in corner_sidewalk_paths(center, outgoing, radius):
         feet, tops, outers, skirts = [], [], [], []

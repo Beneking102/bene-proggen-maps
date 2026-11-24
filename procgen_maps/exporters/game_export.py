@@ -38,6 +38,7 @@ _UNITY_SUFFIX = {"only": "_col", "mesh": "", "convex": "_col", "navmesh": "_navm
 
 @dataclass(frozen=True)
 class GameExportOptions:
+    """What the game export adds: colliders, LODs, the walkable ground, lights; and whose naming."""
     collision: bool = True
     naming: str = "GODOT"        # "GODOT" | "UNITY"
     lods: bool = True
@@ -54,10 +55,12 @@ def collision_name(base: str, naming: str, kind: str = "only") -> str:
 
 
 def lod_name(base: str, level: int) -> str:
+    """`<base>_LOD<level>`: the LOD naming both Godot and Unity importers read."""
     return f"{base}_LOD{level}"
 
 
 def walkable_name(base: str, naming: str) -> str:
+    """The walkable mesh's name for `naming` (Godot: `-navmesh`, Unity: `_navmesh`)."""
     table = _GODOT_SUFFIX if naming.upper() == "GODOT" else _UNITY_SUFFIX
     return base + table["navmesh"]
 
@@ -111,10 +114,18 @@ class _Surgery:
         self.reparented: List[Tuple[object, object]] = []  # (object, original parent)
         self.instance_swaps: List[Tuple[object, object]] = []  # (empty, original instance_collection)
         self.built_sources: List[Tuple[str, str]] = []     # (asset_id, detail) factory sources built just for the export
+        self.unlinked: List[Tuple[object, object]] = []    # (object, collection) taken out of the scene for the export
 
     def restore(self):
+        """Undo every scene change the export made, in reverse order."""
         import bpy
 
+        for obj, collection in self.unlinked:
+            try:
+                if obj.name not in collection.objects:
+                    collection.objects.link(obj)
+            except ReferenceError:
+                pass
         for empty, original in self.instance_swaps:
             try:
                 empty.instance_collection = original
@@ -195,6 +206,14 @@ def _build_hierarchy(surgery: _Surgery, options: GameExportOptions, summary: Dic
     root_coll = bpy.data.collections.new(EXPORT_ROOT_NAME)
     scene.collection.children.link(root_coll)
     surgery.created_collections.append(root_coll)
+
+    # The horizon skirt is render scenery (kilometres of flat ground), not
+    # part of the map: take it out of the scene for the duration of the export.
+    horizon = bpy.data.objects.get(terrain_gen.HORIZON_OBJECT_NAME)
+    if horizon is not None:
+        for collection in list(horizon.users_collection):
+            collection.objects.unlink(horizon)
+            surgery.unlinked.append((horizon, collection))
 
     def empty(name, parent=None):
         obj = bpy.data.objects.new(name, None)
@@ -555,6 +574,7 @@ def verify_glb(filepath: str) -> Dict[str, int]:
         "walkable": sum(1 for n in names if "Walkable" in n),
         "roots": sum(1 for obj in imported if obj.parent is None and obj.name.split(".")[0] in ("City", "Terrain", "Dungeon")),
         "meshes": sum(1 for obj in imported if obj.type == 'MESH'),
+        "horizon": sum(1 for n in names if "Horizon" in n),
     }
     # Remove what the import added, by hand: orphans_purge would also take
     # the addon's own unlinked instance-source collections with it.

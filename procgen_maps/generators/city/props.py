@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple
 
 from ...assets import library
 from ...utils.spatial import SpatialHashGrid
+from .. import landscape
 from .. import terrain as terrain_gen
 from .buildings import BuildingPlan
 from .layout import Block
@@ -32,17 +33,21 @@ _CAR_LANE_INSET = 1.3            # meters from the curb to a parked car's center
 _END_CLEARANCE = 0.5             # meters past the crossing street's sidewalk before the first lamp/tree
 _PARKING_LOT_MARGIN = 0.5        # meters around a parking lot kept free of street props
 
-# City-edge forest: trees scattered in a ring outside the built-up radius,
-# thinning out with distance, so the city doesn't end in a hard line on
-# bare ground. Density is per square meter at the inner edge of the ring.
-_FOREST_RING_START = 1.06        # x city radius
-_FOREST_RING_END = 1.9           # x city radius
-_FOREST_DENSITY = 0.0028         # trees / sqm at the inner edge (~1 tree per 19 m)
-_FOREST_MAX_TREES = 3500
+# City-edge forest: trees in a ring outside the built-up radius, standing
+# in clumps (woods) that thin out with distance, so the city doesn't end
+# in a hard line on bare ground. The clump mask and the ring limits live
+# in generators/landscape.py (the terrain shader reads the same mask for
+# the forest floor). Density is candidates per square meter of the ring;
+# the mask keeps roughly half of them.
+_FOREST_RING_START = landscape.FOREST_START   # x city radius
+_FOREST_RING_END = landscape.FOREST_END       # x city radius
+_FOREST_DENSITY = 0.013         # candidate trees / sqm of the ring (~1 kept tree per 12 m inside a wood)
+_FOREST_MAX_TREES = 8000
 
 
 @dataclass
 class PropPlacement:
+    """One placed prop: asset id, world location, heading and instance scale."""
     asset_id: str
     location: Tuple[float, float, float]
     rotation_z: float = 0.0
@@ -227,8 +232,14 @@ def plan_props(graph: StreetGraph, blocks: List[Block], zone_by_block: Dict[int,
         rim_roads = [road for road in roads
                      if max(math.hypot(road[0], road[1]), math.hypot(road[2], road[3])) >= rim]
         park_rects = [spec.rect for spec in park_by_block.values()]
-        for x, y, scale, rotation_z in plan_forest_ring(city_radius, rng):
-            if setback.road_clearance((x, y, x, y), rim_roads) < SIDEWALK_WIDTH:
+        landscape_seed = preset.seed if seed is None else seed
+        world_half = terrain_params.world_size / 2.0 if terrain_params is not None else city_radius * 2.1
+        # Hedgerow trees on the field borders, then the woods; both from
+        # generators/landscape.py, which also paints the ground under them.
+        wild = landscape.hedgerow_points(city_radius, world_half, landscape_seed, rng)
+        wild += plan_forest_ring(city_radius, rng, seed=landscape_seed)
+        for x, y, scale, rotation_z in wild:
+            if setback.road_clearance((x, y, x, y), rim_roads) < SIDEWALK_WIDTH + 1.0:
                 continue
             # The ring starts just outside the city circle, which the
             # outermost blocks can still reach: no wild trees on a rim
@@ -252,13 +263,15 @@ def street_prop_trims(graph: StreetGraph, a: int, b: int, fan_radius_by_node: Di
     return trims[0], trims[1]
 
 
-def plan_forest_ring(city_radius: float, rng: random.Random) -> List[Tuple[float, float, float, float]]:
+def plan_forest_ring(city_radius: float, rng: random.Random, seed: int = 0) -> List[Tuple[float, float, float, float]]:
     """(x, y, scale, rotation_z) candidates for the city-edge forest: points
     uniformly distributed over the ring [_FOREST_RING_START, _FOREST_RING_END]
-    x radius, each kept with a probability that falls off linearly with
-    distance so the forest thins out instead of ending in another hard
-    edge. Larger trees (up to 1.6x) than the manicured street trees. Pure
-    Python; callers push the result through the collision grid."""
+    x radius, each kept with the probability landscape.forest_density
+    gives - the ring's thinning falloff times the clump mask, so the
+    trees stand in woods with open fields between and the forest thins
+    out instead of ending in another hard edge. Larger trees (up to 1.8x)
+    than the manicured street trees. Pure Python; callers push the result
+    through the collision grid."""
     inner = city_radius * _FOREST_RING_START
     outer = city_radius * _FOREST_RING_END
     ring_area = math.pi * (outer * outer - inner * inner)
@@ -267,11 +280,11 @@ def plan_forest_ring(city_radius: float, rng: random.Random) -> List[Tuple[float
     for _ in range(count):
         # Uniform in area: r = sqrt(u * (R^2 - r0^2) + r0^2).
         r = math.sqrt(rng.random() * (outer * outer - inner * inner) + inner * inner)
-        falloff = 1.0 - (r - inner) / (outer - inner)
-        if rng.random() > falloff:
-            continue
         angle = rng.uniform(0.0, math.tau)
-        candidates.append((r * math.cos(angle), r * math.sin(angle), rng.uniform(1.0, 1.6), rng.uniform(0.0, math.tau)))
+        x, y = r * math.cos(angle), r * math.sin(angle)
+        if rng.random() > landscape.forest_density(x, y, city_radius, seed):
+            continue
+        candidates.append((x, y, rng.uniform(1.1, 1.8), rng.uniform(0.0, math.tau)))
     return candidates
 
 

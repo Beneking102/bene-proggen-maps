@@ -1,5 +1,6 @@
-"""Terrain shader: grass-dominant ground with slope-driven rock, dry
-patches, fine speckle and bump - all procedural, no texture files.
+"""Terrain shader: green ground with a countryside patchwork outside the
+city, slope-driven rock, snow on real peaks, fine speckle and bump - all
+procedural, no texture files.
 
 The v0.9 shader mapped absolute height 0..max_height straight onto a
 grass -> dirt -> snow ramp. With the gentler v0.8 terrain (max 22 m,
@@ -8,14 +9,42 @@ half of the ramp, which is why every earlier render had a pale grey-green
 ground that read as frost. Height now only adds a subtle variation on
 top of grass; what actually turns the ground to rock is *slope* (the
 geometry normal's z), which is where rock shows on real hillsides.
+
+v0.15: the countryside is no longer a radial "meadow band" (which came
+out as one pale beige plain) but a patchwork read from per-vertex
+attributes the terrain generator writes from generators/landscape.py -
+field cells with their own tone (meadow greens, a darker crop, a
+ripening yellow-green, golden stubble, ploughed earth), dark hedgerow
+lines on the cell borders, and the forest floor exactly under the tree
+clumps. The same functions place the trees, so ground and vegetation
+agree. Without the attributes (a terrain generated some other way, the
+horizon skirt) the shader falls back to plain grass.
 """
 
 TERRAIN_MATERIAL_NAME = "ProcgenMaps_Terrain"
-_FOREST_FLOOR_NODE = "ProcgenMaps_ForestFloor"     # Map Range over the radial distance: 0 at the city edge, 1 in the forest
-_MEADOW_NODE = "ProcgenMaps_Meadow"                # Map Range: the drier meadow band just outside the city
 _SNOW_NODE = "ProcgenMaps_SnowLine"                # Map Range over absolute height: the snow line in meters
+_FIELD_RAMP_NODE = "ProcgenMaps_FieldTones"        # Color Ramp: field tone 0..1 -> field colour
 SNOW_PERCENTILE = 92.0                             # share of a mountain heightmap below the snow line
 SNOW_MIN_RELIEF = 40.0                             # meters of total relief a terrain needs before its peaks get snow
+
+# Ground palette (scene-linear). Kept dark and saturated on purpose: the
+# physical sky plus sun are bright and AgX desaturates highlights, so
+# anything paler than this renders as beige.
+GRASS_DARK = (0.018, 0.075, 0.012, 1.0)
+GRASS_LIGHT = (0.040, 0.135, 0.022, 1.0)
+GRASS_DRY = (0.095, 0.120, 0.034, 1.0)
+HEDGE_COLOR = (0.014, 0.045, 0.010, 1.0)
+FOREST_FLOOR_DARK = (0.045, 0.032, 0.018, 1.0)
+FOREST_FLOOR_LIGHT = (0.095, 0.068, 0.036, 1.0)
+# Field tones by the cell's random value: mostly meadow greens, some crops.
+FIELD_TONES = (
+    (0.00, (0.030, 0.105, 0.018, 1.0)),   # meadow
+    (0.30, (0.048, 0.145, 0.026, 1.0)),   # lush pasture
+    (0.48, (0.020, 0.075, 0.016, 1.0)),   # dark crop (maize, beet)
+    (0.66, (0.095, 0.150, 0.030, 1.0)),   # ripening barley
+    (0.82, (0.220, 0.165, 0.055, 1.0)),   # golden stubble
+    (0.93, (0.085, 0.055, 0.032, 1.0)),   # ploughed earth
+)
 
 
 def snow_line_height(heights, percentile: float = SNOW_PERCENTILE) -> float:
@@ -36,32 +65,25 @@ def snow_line_height(heights, percentile: float = SNOW_PERCENTILE) -> float:
 
 
 def set_terrain_biomes(city_radius: float, snow_z: float = None):
-    """Retune the biome bands for the terrain/city that was just generated
-    (the material is created once and shared): meadow from the city edge
-    to 1.2 x radius, forest floor from 1.15 x radius outwards, snow
-    above `snow_z` meters (see snow_line_height)."""
+    """Retune the terrain material for the terrain that was just generated
+    (the material is created once and shared): snow above `snow_z`
+    meters (see snow_line_height). `city_radius` is accepted for the
+    callers that still pass it; the field / forest bands come from the
+    mesh attributes since v0.15 and need no retuning."""
     import bpy
 
     mat = bpy.data.materials.get(TERRAIN_MATERIAL_NAME)
     if mat is None or not mat.use_nodes:
         return
-    nodes = mat.node_tree.nodes
-    forest = nodes.get(_FOREST_FLOOR_NODE)
-    meadow = nodes.get(_MEADOW_NODE)
-    snow = nodes.get(_SNOW_NODE)
+    snow = mat.node_tree.nodes.get(_SNOW_NODE)
     if snow is not None and snow_z is not None:
         snow_z = min(snow_z, 1.0e5)   # an infinite line (no snow) still needs finite node values
         snow.inputs["From Min"].default_value = snow_z - 1.5
         snow.inputs["From Max"].default_value = snow_z + 1.0
-    if forest is not None:
-        forest.inputs["From Min"].default_value = city_radius * 1.15
-        forest.inputs["From Max"].default_value = city_radius * 1.6
-    if meadow is not None:
-        meadow.inputs["From Min"].default_value = city_radius * 0.95
-        meadow.inputs["From Max"].default_value = city_radius * 1.2
 
 
 def get_or_create_terrain_material(max_height: float = 40.0, city_radius: float = 300.0):
+    """The shared terrain material (created once, see the module docstring)."""
     import bpy
 
     from . import atmosphere
@@ -124,9 +146,15 @@ def get_or_create_terrain_material(max_height: float = 40.0, city_radius: float 
         links.new(vector, node.inputs["Vector"])
         return node.outputs["Fac"]
 
-    output = new("ShaderNodeOutputMaterial", 1100, 0)
-    bsdf = new("ShaderNodeBsdfPrincipled", 800, 0)
-    bsdf.inputs["Specular IOR Level"].default_value = 0.2
+    def attribute(name, x, y):
+        node = new("ShaderNodeAttribute", x, y)
+        node.attribute_type = 'GEOMETRY'
+        node.attribute_name = name
+        return node.outputs["Fac"]
+
+    output = new("ShaderNodeOutputMaterial", 1300, 0)
+    bsdf = new("ShaderNodeBsdfPrincipled", 1000, 0)
+    bsdf.inputs["Specular IOR Level"].default_value = 0.15
     links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
 
     geometry = new("ShaderNodeNewGeometry", -1400, 300)
@@ -137,83 +165,84 @@ def get_or_create_terrain_material(max_height: float = 40.0, city_radius: float 
     links.new(geometry.outputs["Normal"], normal_z.inputs["Vector"])
 
     # Grass: two greens blended by a broad noise (meadow patchiness) plus a
-    # fine speckle, and dry straw-colored patches from a very large noise.
+    # fine speckle, and a few drier olive patches from a very large noise.
     patch = noise(position, 0.02, detail=3.0, x=-1000, y=-100)
     speckle = noise(position, 2.5, detail=5.0, roughness=0.6, x=-1000, y=-300)
-    dry = map_range(noise(position, 0.006, detail=2.0, x=-1000, y=-500), 0.66, 0.86, 0.0, 0.45, x=-800, y=-500)
-    grass = mix_color(patch, (0.055, 0.165, 0.035, 1.0), (0.11, 0.26, 0.06, 1.0), x=-600, y=-100)
-    grass = mix_color(map_range(speckle, 0.0, 1.0, -0.12, 0.12, x=-600, y=-300), grass, (0.16, 0.30, 0.08, 1.0),
-                      x=-400, y=-100) if False else grass
-    speckle_tone = map_range(speckle, 0.0, 1.0, 0.82, 1.18, x=-600, y=-300)
-    grass = mix_color(dry, grass, (0.36, 0.33, 0.15, 1.0), x=-400, y=-100)
+    dry = map_range(noise(position, 0.006, detail=2.0, x=-1000, y=-500), 0.68, 0.88, 0.0, 0.35, x=-800, y=-500)
+    grass = mix_color(patch, GRASS_DARK, GRASS_LIGHT, x=-600, y=-100)
+    speckle_tone = map_range(speckle, 0.0, 1.0, 0.84, 1.16, x=-600, y=-300)
+    grass = mix_color(dry, grass, GRASS_DRY, x=-400, y=-100)
 
-    # Biomes by distance from the city (v0.14): the meadow band just
-    # outside the city is drier and lighter, the forest ring's floor is
-    # darker and browner with leaf litter. Both Map Range nodes are
-    # retuned per preset by set_terrain_biomes.
-    radial = math('SQRT', math('ADD', math('MULTIPLY', separate.outputs["X"], separate.outputs["X"], x=-1200, y=600),
-                               math('MULTIPLY', separate.outputs["Y"], separate.outputs["Y"], x=-1200, y=500),
-                               x=-1050, y=550), x=-950, y=550)
-    meadow_node = new("ShaderNodeMapRange", -800, 650)
-    meadow_node.name = _MEADOW_NODE
-    links.new(radial, meadow_node.inputs["Value"])
-    meadow_node.inputs["From Min"].default_value = city_radius * 0.95
-    meadow_node.inputs["From Max"].default_value = city_radius * 1.2
-    meadow_band = math('SUBTRACT', meadow_node.outputs["Result"], 0.0, x=-600, y=650)
-    forest_node = new("ShaderNodeMapRange", -800, 450)
-    forest_node.name = _FOREST_FLOOR_NODE
-    links.new(radial, forest_node.inputs["Value"])
-    forest_node.inputs["From Min"].default_value = city_radius * 1.15
-    forest_node.inputs["From Max"].default_value = city_radius * 1.6
-    # Meadow: hay-coloured patches blended by a mid-scale noise.
-    meadow_mix = math('MULTIPLY', meadow_band, map_range(patch, 0.3, 0.7, 0.15, 0.85, x=-600, y=750), x=-400, y=700)
-    grass = mix_color(meadow_mix, grass, (0.24, 0.30, 0.09, 1.0), x=-200, y=700)
-    # Forest floor: dark humus with leaf-litter speckle, keeps a little grass.
-    litter = mix_color(speckle, (0.11, 0.08, 0.05, 1.0), (0.22, 0.16, 0.09, 1.0), x=-400, y=500)
-    grass = mix_color(math('MULTIPLY', forest_node.outputs["Result"], 0.9, x=-400, y=400), grass, litter,
-                      x=-200, y=500)
+    # Countryside patchwork from the landscape attributes (see the module
+    # docstring): field cells in their own tone, hedgerow lines, forest
+    # floor under the tree clumps. A tone of 0 everywhere (no attributes)
+    # leaves the plain grass.
+    field_fac = attribute("procgen_maps_field", -1000, 900)
+    field_tone = attribute("procgen_maps_field_tone", -1000, 750)
+    hedge_fac = attribute("procgen_maps_hedge", -1000, 600)
+    forest_fac = attribute("procgen_maps_forest", -1000, 450)
+    ramp = new("ShaderNodeValToRGB", -800, 750)
+    ramp.name = _FIELD_RAMP_NODE
+    ramp.color_ramp.interpolation = 'CONSTANT'
+    elements = ramp.color_ramp.elements
+    while len(elements) > 1:
+        elements.remove(elements[-1])
+    elements[0].position = FIELD_TONES[0][0]
+    elements[0].color = FIELD_TONES[0][1]
+    for position_value, color in FIELD_TONES[1:]:
+        element = elements.new(position_value)
+        element.color = color
+    links.new(field_tone, ramp.inputs["Fac"])
+    # A little of the grass patchiness inside every field so it is not a flat fill.
+    field_color = mix_color(map_range(patch, 0.0, 1.0, -0.12, 0.12, x=-600, y=850), ramp.outputs["Color"],
+                            GRASS_LIGHT, x=-400, y=800)
+    ground = mix_color(field_fac, grass, field_color, x=-200, y=700)
+    ground = mix_color(math('MULTIPLY', hedge_fac, 0.85, x=-400, y=600), ground, HEDGE_COLOR, x=-50, y=600)
+    litter = mix_color(speckle, FOREST_FLOOR_DARK, FOREST_FLOOR_LIGHT, x=-400, y=450)
+    forest_mix = map_range(forest_fac, 0.55, 0.95, 0.0, 0.8, x=-400, y=350)
+    ground = mix_color(forest_mix, ground, litter, x=100, y=500)
 
     # Height adds a gentle cool/dark shift toward the top of the field.
     height_fac = map_range(separate.outputs["Z"], 0.0, max(max_height, 1.0), 0.0, 1.0, x=-1000, y=300)
-    ground = mix_color(math('MULTIPLY', height_fac, 0.18, x=-800, y=300), grass, (0.20, 0.22, 0.14, 1.0),
-                       x=-200, y=100)
+    ground = mix_color(math('MULTIPLY', height_fac, 0.14, x=-800, y=300), ground, (0.12, 0.15, 0.08, 1.0),
+                       x=250, y=300)
 
     # Rock on slopes: normal.z below ~0.93 (~21 degrees) starts showing rock.
     slope = map_range(normal_z.outputs["Z"], 0.80, 0.94, 1.0, 0.0, x=-1000, y=100)
     rock_noise = noise(position, 0.6, detail=4.0, x=-800, y=-700)
-    rock = mix_color(rock_noise, (0.22, 0.20, 0.18, 1.0), (0.42, 0.38, 0.33, 1.0), x=-400, y=-700)
-    ground = mix_color(slope, ground, rock, x=100, y=100)
+    rock = mix_color(rock_noise, (0.20, 0.18, 0.16, 1.0), (0.38, 0.34, 0.30, 1.0), x=-400, y=-700)
+    ground = mix_color(slope, ground, rock, x=400, y=100)
 
     # Snow on the high, flat ground (the peaks): above the snow line
     # (absolute meters, set per terrain by set_terrain_biomes from the
     # heightmap's own distribution), fading in over a noisy band so the
     # line is ragged; steeper ground stays rock.
-    snow_node = new("ShaderNodeMapRange", -800, 900)
+    snow_node = new("ShaderNodeMapRange", -800, 1100)
     snow_node.name = _SNOW_NODE
     links.new(separate.outputs["Z"], snow_node.inputs["Value"])
     snow_node.inputs["From Min"].default_value = max_height * 0.95 - 1.5
     snow_node.inputs["From Max"].default_value = max_height * 0.95 + 1.0
     snow_fac = math('MULTIPLY', snow_node.outputs["Result"],
-                    map_range(normal_z.outputs["Z"], 0.75, 0.9, 0.0, 1.0, x=-800, y=1000), x=-600, y=950)
-    snow_fac = math('MULTIPLY', snow_fac, map_range(patch, 0.2, 0.8, 0.6, 1.0, x=-600, y=1050), x=-400, y=950)
-    ground = mix_color(snow_fac, ground, (0.85, 0.88, 0.92, 1.0), x=300, y=300)
+                    map_range(normal_z.outputs["Z"], 0.75, 0.9, 0.0, 1.0, x=-800, y=1250), x=-600, y=1150)
+    snow_fac = math('MULTIPLY', snow_fac, map_range(patch, 0.2, 0.8, 0.6, 1.0, x=-600, y=1300), x=-400, y=1150)
+    ground = mix_color(snow_fac, ground, (0.85, 0.88, 0.92, 1.0), x=550, y=300)
 
-    tone = new("ShaderNodeMix", 300, 100)
+    tone = new("ShaderNodeMix", 750, 100)
     tone.data_type = 'RGBA'
     tone.blend_type = 'MULTIPLY'
     tone.inputs[0].default_value = 1.0
     links.new(ground, tone.inputs[6])
-    speckle_rgb = new("ShaderNodeCombineColor", 100, -300)
+    speckle_rgb = new("ShaderNodeCombineColor", 550, -300)
     for index in range(3):
         links.new(speckle_tone, speckle_rgb.inputs[index])
     links.new(speckle_rgb.outputs["Color"], tone.inputs[7])
     links.new(tone.outputs[2], bsdf.inputs["Base Color"])
 
-    links.new(map_range(rock_noise, 0.0, 1.0, 0.78, 0.95, x=300, y=-500), bsdf.inputs["Roughness"])
+    links.new(map_range(rock_noise, 0.0, 1.0, 0.80, 0.96, x=550, y=-500), bsdf.inputs["Roughness"])
 
-    bump_noise = noise(position, 12.0, detail=6.0, roughness=0.65, x=100, y=-700)
-    bump = new("ShaderNodeBump", 500, -600)
-    bump.inputs["Strength"].default_value = 0.25
+    bump_noise = noise(position, 12.0, detail=6.0, roughness=0.65, x=350, y=-700)
+    bump = new("ShaderNodeBump", 750, -600)
+    bump.inputs["Strength"].default_value = 0.22
     bump.inputs["Distance"].default_value = 0.15
     links.new(bump_noise, bump.inputs["Height"])
     links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])

@@ -122,7 +122,8 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     parking_lot_specs = plan.parking_lot_specs
 
     _flatten_terrain_under_buildings(terrain_params, building_plans + special_plans, street_graph, preset,
-                                     river=city_layout.river)
+                                     river=city_layout.river,
+                                     landscape=(city_layout.radius, preset.seed if seed is None else seed))
 
     if parent_collection is None:
         parent_collection = bpy.context.scene.collection
@@ -182,7 +183,8 @@ def generate_city(preset, terrain_params=None, seed=None, parent_collection=None
     }
 
 
-def _flatten_terrain_under_buildings(terrain_params, plans, street_graph=None, preset=None, river=None):
+def _flatten_terrain_under_buildings(terrain_params, plans, street_graph=None, preset=None, river=None,
+                                     landscape=None):
     """Reshape the visible terrain mesh so every building's flat foundation
     sits flush on the ground, using the exact same base_z formula
     buildings.build_building_meshes uses (footprint-centroid height
@@ -205,6 +207,13 @@ def _flatten_terrain_under_buildings(terrain_params, plans, street_graph=None, p
     # Drop the previous city's pads first - otherwise a city-only
     # regenerate leaves flat rectangles where the old buildings stood.
     terrain_gen.reset_terrain_heights(terrain_obj, terrain_params)
+    if landscape is not None:
+        # The woods / hedgerows the props stage planted come from the
+        # city's seed and radius; repaint the ground to match them (a
+        # city-only regenerate with a new seed otherwise keeps the old
+        # terrain's forest floor under the new trees).
+        city_radius, landscape_seed = landscape
+        terrain_gen.write_landscape_attributes(terrain_obj, terrain_params, city_radius, landscape_seed)
 
     footprints_with_target_z = []
     for footprint in (plan.footprint for plan in plans):

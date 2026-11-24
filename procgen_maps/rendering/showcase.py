@@ -28,6 +28,8 @@ def collect_scene_bounds(root_collection):
     def visit(collection):
         nonlocal found
         for obj in collection.objects:
+            if obj.get("procgen_maps_horizon"):
+                continue   # the horizon skirt reaches kilometres out; it is scenery, not the map
             if obj.type == 'MESH':
                 for corner in obj.bound_box:
                     world_corner = obj.matrix_world @ mathutils.Vector(corner)
@@ -110,6 +112,7 @@ def build_interior_framing(building_obj, view_distance=7.0, eye_height=1.5, min_
 
 
 def build_showcase_camera(plan: framing_calc.FramingPlan):
+    """Create or move the showcase camera object to `plan`."""
     import bpy
     import mathutils
 
@@ -220,6 +223,7 @@ def configure_render_settings(resolution=(3840, 2160), samples=DEFAULT_SHOWCASE_
 
 
 def render_showcase(filepath, resolution=(3840, 2160), samples=DEFAULT_SHOWCASE_SAMPLES):
+    """Render a still to `filepath` with the showcase settings (Cycles CPU, denoised)."""
     import bpy
 
     configure_render_settings(resolution=resolution, samples=samples)

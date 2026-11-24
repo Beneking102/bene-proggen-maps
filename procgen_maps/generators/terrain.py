@@ -16,6 +16,7 @@ TERRAIN_OBJECT_NAME = "ProcgenMaps_Terrain"
 
 @dataclass(frozen=True)
 class TerrainParams:
+    """Heightmap noise parameters and the world size/resolution of one terrain (frozen)."""
     resolution: int = 256
     world_size: float = 1000.0
     scale: float = 120.0
@@ -326,3 +327,128 @@ def lower_terrain_under_corridors(terrain_obj, params: TerrainParams, corridors,
     mesh.vertices.foreach_set("co", coords.ravel())
     mesh.update()
     return int(np.count_nonzero(inside))
+
+
+# --- landscape attributes and the horizon ---------------------------------------
+
+HORIZON_OBJECT_NAME = "ProcgenMaps_Horizon"
+LANDSCAPE_ATTRIBUTES = ("procgen_maps_field", "procgen_maps_field_tone", "procgen_maps_hedge", "procgen_maps_forest")
+HORIZON_SKIRT_WIDTH = 160.0    # meters the ground slopes down past the terrain edge
+HORIZON_SKIRT_DROP = 4.0       # meters the skirt ends below the lowest edge vertex
+HORIZON_REACH = 8000.0         # half size of the flat far ground (beyond the showcase camera's clip)
+HORIZON_PROPERTY = "procgen_maps_horizon"
+
+
+def write_landscape_attributes(terrain_obj, params: TerrainParams, city_radius: float, seed: int):
+    """Store generators/landscape.py's field / hedge / forest masks as
+    per-vertex float attributes on the terrain mesh (see
+    LANDSCAPE_ATTRIBUTES); the terrain shader reads them, and the same
+    functions drive the tree placement, so woods and hedgerows stand on
+    their own ground. Cheap: one vectorized pass over the grid."""
+    import numpy as np
+
+    from . import landscape
+
+    mesh = terrain_obj.data
+    count = len(mesh.vertices)
+    coords = np.empty(count * 3, dtype=np.float32)
+    mesh.vertices.foreach_get("co", coords)
+    coords = coords.reshape(count, 3)
+    masks = landscape.landscape_masks(coords[:, 0].astype(np.float64), coords[:, 1].astype(np.float64),
+                                      city_radius, seed)
+    for name, values in zip(LANDSCAPE_ATTRIBUTES, masks):
+        attribute = mesh.attributes.get(name)
+        if attribute is None or attribute.domain != 'POINT' or attribute.data_type != 'FLOAT':
+            if attribute is not None:
+                mesh.attributes.remove(attribute)
+            attribute = mesh.attributes.new(name, 'FLOAT', 'POINT')
+        attribute.data.foreach_set("value", np.ascontiguousarray(values, dtype=np.float32))
+    mesh.update()
+
+
+def horizon_geometry(edge_loop, skirt_width=HORIZON_SKIRT_WIDTH, drop=HORIZON_SKIRT_DROP, reach=HORIZON_REACH):
+    """(verts, faces) of the horizon skirt: `edge_loop` is the terrain's
+    boundary as an ordered list of (x, y, z) going around the square;
+    every edge vertex gets a partner pushed `skirt_width` outwards (along
+    the direction from the origin, so the ring stays a rounded square)
+    at the skirt floor, and a far partner at `reach`, both at the floor
+    height (lowest edge vertex minus `drop`). Two quad rings join them.
+    Pure Python, unit-tested."""
+    import math as _math
+
+    n = len(edge_loop)
+    if n < 3:
+        return [], []
+    floor_z = min(p[2] for p in edge_loop) - drop
+    verts = [tuple(p) for p in edge_loop]
+    for (x, y, _z) in edge_loop:
+        length = _math.hypot(x, y) or 1.0
+        verts.append((x + x / length * skirt_width, y + y / length * skirt_width, floor_z))
+    for (x, y, _z) in edge_loop:
+        length = _math.hypot(x, y) or 1.0
+        verts.append((x / length * reach, y / length * reach, floor_z))
+    faces = []
+    for ring in (0, 1):
+        base = ring * n
+        for i in range(n):
+            j = (i + 1) % n
+            faces.append((base + i, base + j, base + n + j, base + n + i))
+    return verts, faces
+
+
+def terrain_edge_loop(params: TerrainParams, heights):
+    """The terrain grid's boundary vertices, counter-clockwise from the
+    (-half, -half) corner, as (x, y, z) tuples matching build_terrain_mesh."""
+    res = params.resolution
+    half = params.world_size / 2.0
+    step = params.world_size / (res - 1)
+
+    def at(col, row):
+        return (-half + col * step, -half + row * step, float(heights[row, col]))
+
+    loop = [at(c, 0) for c in range(res - 1)]
+    loop += [at(res - 1, r) for r in range(res - 1)]
+    loop += [at(c, res - 1) for c in range(res - 1, 0, -1)]
+    loop += [at(0, r) for r in range(res - 1, 0, -1)]
+    return loop
+
+
+def build_horizon_mesh(params: TerrainParams, collection, material=None):
+    """Build (or replace) the horizon object: a skirt sloping down from
+    the terrain's edge into a flat far ground that reaches well past the
+    camera's clip distance, so the map never ends in a cliff against the
+    sky. Marked with HORIZON_PROPERTY so framing, stats and the exporters
+    can leave it out; it is scenery, not part of the map."""
+    import bpy
+    import numpy as np
+
+    heights = generate_heightmap(params)
+    verts, faces = horizon_geometry(terrain_edge_loop(params, heights))
+    existing = bpy.data.objects.get(HORIZON_OBJECT_NAME)
+    if existing is not None:
+        old_mesh = existing.data
+        bpy.data.objects.remove(existing, do_unlink=True)
+        if old_mesh is not None and old_mesh.users == 0:
+            bpy.data.meshes.remove(old_mesh)
+    mesh = bpy.data.meshes.new(HORIZON_OBJECT_NAME)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update(calc_edges=True)
+    mesh.polygons.foreach_set("use_smooth", np.ones(len(faces), dtype=bool))
+    if material is not None:
+        mesh.materials.append(material)
+    obj = bpy.data.objects.new(HORIZON_OBJECT_NAME, mesh)
+    obj[HORIZON_PROPERTY] = True
+    collection.objects.link(obj)
+    return obj
+
+
+def clear_horizon():
+    """Remove the horizon object (a terrain-only regenerate rebuilds it)."""
+    import bpy
+
+    existing = bpy.data.objects.get(HORIZON_OBJECT_NAME)
+    if existing is not None:
+        old_mesh = existing.data
+        bpy.data.objects.remove(existing, do_unlink=True)
+        if old_mesh is not None and old_mesh.users == 0:
+            bpy.data.meshes.remove(old_mesh)

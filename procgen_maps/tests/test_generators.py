@@ -853,16 +853,23 @@ def test_sidewalk_trim_clears_crossing_streets_but_not_dead_ends():
 
 
 def test_plan_forest_ring_stays_outside_city_and_thins_outward():
+    from procgen_maps.generators import landscape
+
     rng = random.Random(5)
-    trees = plan_forest_ring(200.0, rng)
-    assert 300 < len(trees) < 3500
+    trees = plan_forest_ring(200.0, rng, seed=5)
+    assert 300 < len(trees) < 9000
     radii = sorted(math.hypot(x, y) for x, y, _scale, _rot in trees)
-    assert radii[0] >= 200.0 * 1.06 - 1e-9
-    assert radii[-1] <= 200.0 * 1.9 + 1e-9
-    inner_half = sum(1 for r in radii if r < 200.0 * 1.48)
-    assert inner_half > len(radii) * 0.6   # denser near the city than far out
-    assert all(1.0 <= scale <= 1.6 for _x, _y, scale, _rot in trees)
-    assert plan_forest_ring(200.0, random.Random(5)) == trees   # deterministic
+    assert radii[0] >= 200.0 * landscape.FOREST_START - 1e-9
+    assert radii[-1] <= 200.0 * landscape.FOREST_END + 1e-9
+    inner = sum(1 for r in radii if r < 200.0 * 1.5)
+    inner_area = math.pi * ((200.0 * 1.5) ** 2 - (200.0 * landscape.FOREST_START) ** 2)
+    outer_area = math.pi * ((200.0 * landscape.FOREST_END) ** 2 - (200.0 * 1.5) ** 2)
+    assert inner / inner_area > 1.3 * (len(radii) - inner) / outer_area   # denser near the city than far out
+    assert all(1.1 <= scale <= 1.8 for _x, _y, scale, _rot in trees)
+    assert plan_forest_ring(200.0, random.Random(5), seed=5) == trees   # deterministic
+    # Clumped: the trees stand in woods, so most of them have a close neighbour
+    # and a good share of the ring's ground is open.
+    assert all(landscape.forest_density(x, y, 200.0, 5) > 0.0 for x, y, _s, _r in trees)
 
 
 def test_plan_props_without_city_radius_places_no_forest():

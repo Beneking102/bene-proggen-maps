@@ -25,14 +25,21 @@ DENSITY_NODE_NAME = "ProcgenMaps_HazeDensity"
 COLOR_NODE_NAME = "ProcgenMaps_HazeColor"
 
 # `haze_strength` (0..1 Lighting-panel slider) -> optical density per meter.
-# 1.0 means ~63% fade at 500 m; the default 0.4 gives ~33% at 500 m, so a
+# 1.0 means ~63% fade at 500 m; the default 0.3 gives ~26% at 500 m, so a
 # 400 m-radius city's far edge is visibly softer but still fully legible.
 DENSITY_PER_STRENGTH = 0.002
-DEFAULT_HAZE_STRENGTH = 0.4
+DEFAULT_HAZE_STRENGTH = 0.3
 DEFAULT_HAZE_COLOR = (0.62, 0.70, 0.82, 1.0)
+# The haze colour is a display-ish 0..1 tint; the physical sky it should
+# match sits at several units of scene-linear radiance near the horizon
+# (the addon renders at about -2.7 EV), so the emission is scaled up by this
+# much. v0.14 and earlier used 1.0, which made every distant surface fade
+# to a *dark* grey-blue and the horizon read as a flat grey void.
+HAZE_BRIGHTNESS = 1.6
 
 
 def get_or_create_haze_group():
+    """The shared aerial-perspective node group (created once; see the module docstring)."""
     import bpy
 
     existing = bpy.data.node_groups.get(GROUP_NAME)
@@ -90,7 +97,7 @@ def get_or_create_haze_group():
 
     emission = nodes.new("ShaderNodeEmission")
     emission.location = (-100, -450)
-    emission.inputs["Strength"].default_value = 1.0
+    emission.inputs["Strength"].default_value = HAZE_BRIGHTNESS
     links.new(color.outputs[0], emission.inputs["Color"])
 
     mix = nodes.new("ShaderNodeMixShader")
@@ -150,8 +157,6 @@ def haze_color_for_sun(sun_elevation: float):
     peach one, blended over the lowest ~17 degrees so the Lighting panel's
     Golden Hour preset gets a matching atmosphere automatically. Pure
     Python so it is unit-testable."""
-    import math
-
     t = max(0.0, min(1.0, sun_elevation / 0.3))
     warm = (0.86, 0.66, 0.48, 1.0)
     cool = DEFAULT_HAZE_COLOR
