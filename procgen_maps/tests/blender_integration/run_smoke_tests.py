@@ -61,6 +61,11 @@ def main():
         terrain_obj = bpy.data.objects.get("ProcgenMaps_Terrain")
         _check("terrain object created", terrain_obj is not None)
         _check("terrain has vertices", terrain_obj is not None and len(terrain_obj.data.vertices) > 0)
+        from procgen_maps.generators import terrain as terrain_gen
+        _check("terrain carries the landscape attributes",
+               terrain_obj is not None and all(name in terrain_obj.data.attributes for name in terrain_gen.LANDSCAPE_ATTRIBUTES))
+        horizon = bpy.data.objects.get(terrain_gen.HORIZON_OBJECT_NAME)
+        _check("horizon skirt created", horizon is not None and len(horizon.data.polygons) > 0)
 
     def generate_city():
         result = bpy.ops.procgen_maps.generate_city()
@@ -141,6 +146,35 @@ def main():
         _check(f"validate_map reports no issues ({settings.validation_summary})",
                settings.validation_summary.startswith("OK"))
 
+    def custom_presets():
+        from procgen_maps.config import user_presets
+
+        directory = user_presets.user_presets_dir()
+        _check("user presets dir resolved", bool(directory))
+        settings.user_preset_name = "smoke test preset"
+        settings.haze_strength = 0.77
+        result = bpy.ops.procgen_maps.save_user_preset()
+        _check("save_user_preset FINISHED", result == {'FINISHED'})
+        _check("preset listed", "smoke test preset" in user_presets.list_presets(directory))
+        settings.haze_strength = 0.1
+        settings.user_preset_choice = "smoke test preset"
+        result = bpy.ops.procgen_maps.load_user_preset()
+        _check("load_user_preset FINISHED", result == {'FINISHED'})
+        _check("loaded preset restored the setting", abs(settings.haze_strength - 0.77) < 1e-6)
+        settings.haze_strength = 0.3
+        _check("delete_user_preset removes the file",
+               bpy.ops.procgen_maps.delete_user_preset() == {'FINISHED'}
+               and "smoke test preset" not in user_presets.list_presets(directory))
+
+    def showcase_bounds_ignore_horizon():
+        from procgen_maps.rendering import showcase
+        from procgen_maps.ui import operators as ops_mod
+
+        root = bpy.data.collections.get(ops_mod.ROOT_COLLECTION_NAME)
+        bounds_min, bounds_max = showcase.collect_scene_bounds(root)
+        _check(f"showcase bounds stay on the map, not the horizon ({bounds_max[0] - bounds_min[0]:.0f} m)",
+               bounds_max[0] - bounds_min[0] < 2000.0)
+
     _run_stage("Generate terrain", generate_terrain)
     _run_stage("Generate city", generate_city)
     _run_stage("Generate dungeon", generate_dungeon)
@@ -149,6 +183,8 @@ def main():
     _run_stage("Terrain reset on city regenerate", terrain_reset_on_city_regenerate)
     _run_stage("Terrain stays under the roads", terrain_under_roads)
     _run_stage("Validate map", validate_map)
+    _run_stage("Custom presets", custom_presets)
+    _run_stage("Showcase bounds ignore the horizon", showcase_bounds_ignore_horizon)
 
     with tempfile.TemporaryDirectory(prefix="procgen_maps_smoke_") as tmp_dir:
         settings.export_directory = tmp_dir
@@ -185,6 +221,9 @@ def main():
             after = {attr: len(getattr(bpy.data, attr)) for attr in ("objects", "meshes", "collections")}
             _check(f"export + re-import leave the scene unchanged {before} -> {after}", before == after)
             _check("export restores every object name", names_before == sorted(obj.name for obj in bpy.data.objects))
+            _check("horizon skirt left out of the GLB", counts.get("horizon", 0) == 0)
+            horizon = bpy.data.objects.get("ProcgenMaps_Horizon")
+            _check("horizon skirt back in the scene after the export", horizon is not None and horizon.users_collection)
             settings.export_naming = "UNITY"
             bpy.ops.procgen_maps.export_gltf()
             counts = game_export.verify_glb(os.path.join(tmp_dir, "procgen_maps.glb"))

@@ -1,6 +1,15 @@
-"""Generate + export operators."""
+"""Generate, export, render, validate and custom-preset operators.
+
+Every operator's `execute` is wrapped by `_safe_execute`: an unexpected
+exception becomes one clean ERROR report in the UI (the traceback goes to
+the system console) instead of a raw Python traceback popup, and the
+panel's "last message" line always says what happened.
+"""
 import dataclasses
+import functools
 import os
+import time
+import traceback
 
 import bpy
 
@@ -56,6 +65,35 @@ def _write_stats(scene, profiler, objects):
     settings.stat_vertices = stats["vertices"]
     settings.stat_faces = stats["faces"]
     settings.stat_generate_seconds = profiler.total_time()
+
+
+def _safe_execute(label):
+    """Decorator for Operator.execute: report what the operator did (or
+    why it failed) in the UI and the panel, never let a traceback reach
+    the user. The wrapped execute returns its own status set; it may call
+    self.report itself for INFO/WARNING messages."""
+    def decorate(execute):
+        @functools.wraps(execute)
+        def wrapper(self, context):
+            settings = getattr(context.scene, "procgen_maps", None)
+            try:
+                result = execute(self, context)
+            except Exception as exc:   # noqa: BLE001 - the whole point is a clean report for any error
+                traceback.print_exc()
+                message = f"{label} failed: {exc.__class__.__name__}: {exc}"
+                self.report({'ERROR'}, message[:400])
+                if settings is not None:
+                    settings.last_message = f"{label} failed - see the system console"
+                return {'CANCELLED'}
+            return result
+        return wrapper
+    return decorate
+
+
+def _say(self, context, message, level='INFO'):
+    """Report `message` and keep it as the panel's last-message line."""
+    self.report({level}, message)
+    context.scene.procgen_maps.last_message = message
 
 
 def _apply_toggle_overrides(preset, settings):
@@ -146,6 +184,7 @@ def _apply_view_transform(scene):
 
 
 def apply_lighting_preset(context, key: str):
+    """Write a LIGHTING_PRESETS entry into the settings and re-apply the sun."""
     from . import LIGHTING_PRESETS
 
     settings = context.scene.procgen_maps
@@ -160,11 +199,13 @@ def apply_lighting_preset(context, key: str):
 
 
 def apply_window_emission(context, strength: float):
+    """Retune the window material's night glow strength."""
     settings = context.scene.procgen_maps
     city_mat.set_night_mode(settings.night_mode, strength)
 
 
 def apply_street_lamp_energy(context, energy: float):
+    """Retune every street lamp light's power."""
     settings = context.scene.procgen_maps
     _update_lamp_lights(settings.night_mode, energy)
 
@@ -272,12 +313,15 @@ def _enable_high_quality_rendering(context):
 
 class _ProgressReporter:
     """Drives the window manager's progress cursor (the percentage next to
-    the mouse pointer) while a long generate runs; a no-op headless. Also
-    prints the stages when the generate takes long enough to matter."""
+    the mouse pointer) while a long generate runs (a no-op headless), and
+    prints one timed line per stage to the system console."""
 
-    def __init__(self, context):
+    def __init__(self, context, verbose=True):
         self._wm = getattr(context, "window_manager", None)
         self._active = False
+        self._verbose = verbose
+        self._started = time.perf_counter()
+        self._last = self._started
         try:
             if self._wm is not None and context.window is not None:
                 self._wm.progress_begin(0, 100)
@@ -288,6 +332,11 @@ class _ProgressReporter:
     def __call__(self, fraction, label):
         if self._active:
             self._wm.progress_update(int(fraction * 100))
+        if self._verbose:
+            now = time.perf_counter()
+            print(f"[Procgen Maps] {int(fraction * 100):3d}% {label} (+{now - self._last:.2f} s, "
+                  f"{now - self._started:.2f} s total)", flush=True)
+            self._last = now
 
     def end(self):
         if self._active:
@@ -298,22 +347,27 @@ class _ProgressReporter:
 class PROCGEN_OT_generate_terrain(bpy.types.Operator):
     bl_idname = "procgen_maps.generate_terrain"
     bl_label = "Generate Terrain"
-    bl_description = "Generate a heightmap terrain mesh for the active preset"
+    bl_description = ("Generate the terrain for the active preset and seed: a heightmap mesh with the "
+                      "countryside patchwork (fields, hedgerows, woods) and the horizon, plus the sky")
     bl_options = {'REGISTER', 'UNDO'}
 
+    @_safe_execute("Generate Terrain")
     def execute(self, context):
         settings = context.scene.procgen_maps
         profiler = Profiler()
         params = _get_terrain_params(context.scene)
         preset = preset_config.get_preset(settings.preset)
         with profiler.stage("terrain"):
-            terrain_mat.get_or_create_terrain_material(params.max_height, preset.radius)
+            mat = terrain_mat.get_or_create_terrain_material(params.max_height, preset.radius)
             terrain_mat.set_terrain_biomes(
                 preset.radius, terrain_mat.snow_line_height(terrain_gen.generate_heightmap(params)))
             obj = terrain_gen.build_terrain_mesh(params, _root_collection())
-            mat = bpy.data.materials.get(terrain_mat.TERRAIN_MATERIAL_NAME)
-            if mat is not None and mat.name not in obj.data.materials.keys():
+            if mat.name not in obj.data.materials.keys():
                 obj.data.materials.append(mat)
+            # Fields, hedgerows and woods for the shader (generators/landscape.py),
+            # and the horizon skirt so the map does not end in a cliff.
+            terrain_gen.write_landscape_attributes(obj, params, preset.radius, settings.seed)
+            terrain_gen.build_horizon_mesh(params, _root_collection(), material=mat)
             context.scene.world = world_mat.get_or_create_sky_world(
                 sun_elevation=settings.sun_elevation, sun_rotation=settings.sun_rotation,
                 sun_energy=settings.sun_energy_day)
@@ -326,20 +380,26 @@ class PROCGEN_OT_generate_terrain(bpy.types.Operator):
         _write_stats(context.scene, profiler, [obj])
         _switch_viewport_to_material_preview(context)
         _enable_high_quality_rendering(context)
-        self.report({'INFO'}, f"Terrain generated ({params.resolution}x{params.resolution})")
+        _say(self, context, f"Terrain generated ({params.resolution}x{params.resolution}, "
+                            f"{params.world_size:.0f} m, {profiler.total_time():.1f} s)")
         return {'FINISHED'}
 
 
 class PROCGEN_OT_generate_city(bpy.types.Operator):
     bl_idname = "procgen_maps.generate_city"
     bl_label = "Generate City"
-    bl_description = "Generate the full city (layout, zones, streets, buildings, props) for the active preset"
+    bl_description = ("Generate the full city for the active preset and seed (layout, zones, streets, "
+                      "buildings, props, signs, river, country road and village); replaces an existing city")
     bl_options = {'REGISTER', 'UNDO'}
 
+    @_safe_execute("Generate City")
     def execute(self, context):
         settings = context.scene.procgen_maps
         preset = _apply_toggle_overrides(preset_config.get_preset(settings.preset), settings)
         terrain_params = _get_terrain_params(context.scene) if settings.use_terrain else None
+        if terrain_params is not None and bpy.data.objects.get(terrain_gen.TERRAIN_OBJECT_NAME) is None:
+            self.report({'WARNING'}, "No terrain in the scene - the city follows the heightfield anyway; "
+                                     "use Generate All (or Generate Terrain first) to see the ground")
 
         profiler = Profiler()
         city_gen.clear_city()
@@ -359,17 +419,20 @@ class PROCGEN_OT_generate_city(bpy.types.Operator):
         _write_stats(context.scene, profiler, all_objects)
         _switch_viewport_to_material_preview(context)
         _enable_high_quality_rendering(context)
-        self.report({'INFO'}, f"City generated: {len(result['building_objects'])} buildings, "
-                               f"{len(result['prop_objects'])} props, {len(result['sign_placements'])} signs")
+        _say(self, context, f"City generated: {len(result['building_objects'])} buildings, "
+                            f"{len(result['prop_objects'])} props, {len(result['sign_placements'])} signs "
+                            f"({profiler.total_time():.1f} s)")
         return {'FINISHED'}
 
 
 class PROCGEN_OT_generate_dungeon(bpy.types.Operator):
     bl_idname = "procgen_maps.generate_dungeon"
     bl_label = "Generate Dungeon"
-    bl_description = "Generate a BSP dungeon (rooms + corridors), independent of the city/terrain generators"
+    bl_description = ("Generate a BSP dungeon (rooms, corridors, doors, stairs between levels, torches) in "
+                      "the chosen theme; independent of the city and terrain")
     bl_options = {'REGISTER', 'UNDO'}
 
+    @_safe_execute("Generate Dungeon")
     def execute(self, context):
         from ..generators import dungeon as dungeon_gen
 
@@ -384,19 +447,22 @@ class PROCGEN_OT_generate_dungeon(bpy.types.Operator):
             objects = dungeon_gen.build_dungeon_mesh(layout, _root_collection())
         _write_stats(context.scene, profiler, objects)
         _switch_viewport_to_material_preview(context)
-        self.report({'INFO'}, f"Dungeon generated: {len(layout.rooms)} rooms on {layout.levels} level(s), "
-                               f"{len(layout.stairs)} staircase(s), theme {layout.theme}")
+        _say(self, context, f"Dungeon generated: {len(layout.rooms)} rooms on {layout.levels} level(s), "
+                            f"{len(layout.stairs)} staircase(s), theme {layout.theme}")
         return {'FINISHED'}
 
 
 class PROCGEN_OT_generate_all(bpy.types.Operator):
     bl_idname = "procgen_maps.generate_all"
     bl_label = "Generate All"
-    bl_description = "Generate terrain and then the city in one go (the dungeon stays a separate button)"
+    bl_description = ("Generate the terrain (if Terrain is on) and then the city in one go; the dungeon "
+                      "stays a separate button")
     bl_options = {'REGISTER', 'UNDO'}
 
+    @_safe_execute("Generate All")
     def execute(self, context):
-        if bpy.ops.procgen_maps.generate_terrain() != {'FINISHED'}:
+        settings = context.scene.procgen_maps
+        if settings.use_terrain and bpy.ops.procgen_maps.generate_terrain() != {'FINISHED'}:
             return {'CANCELLED'}
         return bpy.ops.procgen_maps.generate_city()
 
@@ -414,6 +480,96 @@ class PROCGEN_OT_randomize_seed(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class PROCGEN_OT_save_user_preset(bpy.types.Operator):
+    bl_idname = "procgen_maps.save_user_preset"
+    bl_label = "Save Custom Preset"
+    bl_description = ("Save the current generation, lighting, showcase and export settings as a named JSON "
+                      "preset in Blender's user config folder (overwrites a preset of the same name)")
+    bl_options = {'REGISTER'}
+
+    @_safe_execute("Save Custom Preset")
+    def execute(self, context):
+        from ..config import user_presets
+
+        settings = context.scene.procgen_maps
+        name = user_presets.safe_preset_name(settings.user_preset_name)
+        path = user_presets.save_preset(name, user_presets.settings_to_dict(settings), user_presets.user_presets_dir())
+        settings.user_preset_choice = name
+        _say(self, context, f"Saved custom preset '{name}' to {path}")
+        return {'FINISHED'}
+
+
+class PROCGEN_OT_load_user_preset(bpy.types.Operator):
+    bl_idname = "procgen_maps.load_user_preset"
+    bl_label = "Load Custom Preset"
+    bl_description = "Apply the chosen custom preset's settings (regenerate afterwards to see them)"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @_safe_execute("Load Custom Preset")
+    def execute(self, context):
+        from ..config import user_presets
+
+        settings = context.scene.procgen_maps
+        name = settings.user_preset_choice
+        if not name:
+            _say(self, context, "No custom preset chosen - save one first", 'WARNING')
+            return {'CANCELLED'}
+        try:
+            data = user_presets.load_preset(name, user_presets.user_presets_dir(create=False))
+        except FileNotFoundError:
+            _say(self, context, f"Custom preset '{name}' no longer exists", 'WARNING')
+            return {'CANCELLED'}
+        except ValueError as exc:
+            _say(self, context, str(exc), 'WARNING')
+            return {'CANCELLED'}
+        applied = user_presets.dict_to_settings(settings, data)
+        settings.user_preset_name = name
+        apply_sun_settings(context)
+        _say(self, context, f"Loaded custom preset '{name}' ({len(applied)} settings)")
+        return {'FINISHED'}
+
+
+class PROCGEN_OT_delete_user_preset(bpy.types.Operator):
+    bl_idname = "procgen_maps.delete_user_preset"
+    bl_label = "Delete Custom Preset"
+    bl_description = "Delete the chosen custom preset's file"
+    bl_options = {'REGISTER'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    @_safe_execute("Delete Custom Preset")
+    def execute(self, context):
+        from ..config import user_presets
+
+        settings = context.scene.procgen_maps
+        name = settings.user_preset_choice
+        if not name:
+            _say(self, context, "No custom preset chosen", 'WARNING')
+            return {'CANCELLED'}
+        if user_presets.delete_preset(name, user_presets.user_presets_dir(create=False)):
+            _say(self, context, f"Deleted custom preset '{name}'")
+        else:
+            _say(self, context, f"Custom preset '{name}' was already gone", 'WARNING')
+        return {'FINISHED'}
+
+
+class PROCGEN_OT_open_user_presets_dir(bpy.types.Operator):
+    bl_idname = "procgen_maps.open_user_presets_dir"
+    bl_label = "Open Presets Folder"
+    bl_description = "Open the folder the custom presets are stored in (JSON files you can copy or share)"
+    bl_options = {'REGISTER'}
+
+    @_safe_execute("Open Presets Folder")
+    def execute(self, context):
+        from ..config import user_presets
+
+        directory = user_presets.user_presets_dir()
+        bpy.ops.wm.path_open(filepath=directory)
+        _say(self, context, f"Custom presets live in {directory}")
+        return {'FINISHED'}
+
+
 class PROCGEN_OT_export_gltf(bpy.types.Operator):
     bl_idname = "procgen_maps.export_gltf"
     bl_label = "Export glTF"
@@ -421,16 +577,21 @@ class PROCGEN_OT_export_gltf(bpy.types.Operator):
                       "collision meshes, LODs and a walkable ground mesh per the Export panel's options")
     bl_options = {'REGISTER'}
 
+    @_safe_execute("Export glTF")
     def execute(self, context):
         from ..exporters import game_export
         settings = context.scene.procgen_maps
+        if bpy.data.collections.get(ROOT_COLLECTION_NAME) is None and \
+                bpy.data.collections.get(city_gen.CITY_ROOT_COLLECTION_NAME) is None:
+            _say(self, context, "Nothing generated yet - generate terrain, a city or a dungeon first", 'ERROR')
+            return {'CANCELLED'}
         filepath = _resolve_export_path(context, "procgen_maps.glb")
         options = game_export.GameExportOptions(
             collision=settings.export_collision, naming=settings.export_naming,
             lods=settings.export_lods, walkable=settings.export_walkable)
         summary = game_export.export_game_gltf(filepath, options)
-        self.report({'INFO'}, f"Exported glTF to {filepath} ({summary['collision']} colliders, "
-                               f"{summary['lods']} LOD groups, {summary['walkable']} walkable meshes)")
+        _say(self, context, f"Exported glTF to {filepath} ({summary['collision']} colliders, "
+                            f"{summary['lods']} LOD groups, {summary['walkable']} walkable meshes)")
         return {'FINISHED'}
 
 
@@ -440,6 +601,7 @@ class PROCGEN_OT_export_fbx(bpy.types.Operator):
     bl_description = "Export the generated ProcgenMaps collection to a .fbx file"
     bl_options = {'REGISTER'}
 
+    @_safe_execute("Export FBX")
     def execute(self, context):
         from ..exporters import fbx_export
         if not fbx_export.is_fbx_available():
@@ -448,7 +610,7 @@ class PROCGEN_OT_export_fbx(bpy.types.Operator):
             return {'CANCELLED'}
         filepath = _resolve_export_path(context, "procgen_maps.fbx")
         fbx_export.export_fbx(filepath)
-        self.report({'INFO'}, f"Exported FBX to {filepath}")
+        _say(self, context, f"Exported FBX to {filepath}")
         return {'FINISHED'}
 
 
@@ -458,11 +620,12 @@ class PROCGEN_OT_export_usdz(bpy.types.Operator):
     bl_description = "Export the generated ProcgenMaps collection to a .usdz file (best-effort AR export)"
     bl_options = {'REGISTER'}
 
+    @_safe_execute("Export USDZ")
     def execute(self, context):
         from ..exporters import usdz_export
         filepath = _resolve_export_path(context, "procgen_maps.usdz")
         usdz_export.export_usdz(filepath)
-        self.report({'INFO'}, f"Exported USDZ to {filepath}")
+        _say(self, context, f"Exported USDZ to {filepath}")
         return {'FINISHED'}
 
 
@@ -472,13 +635,15 @@ class PROCGEN_OT_export_svg(bpy.types.Operator):
     bl_description = "Export a top-down 2D SVG map of the generated city"
     bl_options = {'REGISTER'}
 
+    @_safe_execute("Export SVG")
     def execute(self, context):
         from ..exporters import svg_export
         filepath = _resolve_export_path(context, "procgen_maps.svg")
         root = bpy.data.collections.get(ROOT_COLLECTION_NAME)
-        objects = _collect_mesh_objects(root) if root else []
+        objects = [obj for obj in (_collect_mesh_objects(root) if root else [])
+                   if not obj.get(terrain_gen.HORIZON_PROPERTY)]
         svg_export.export_svg(filepath, objects)
-        self.report({'INFO'}, f"Exported SVG map to {filepath}")
+        _say(self, context, f"Exported SVG map to {filepath}")
         return {'FINISHED'}
 
 
@@ -488,6 +653,7 @@ class PROCGEN_OT_export_json(bpy.types.Operator):
     bl_description = "Export generation metadata (stats, seed, preset) as JSON"
     bl_options = {'REGISTER'}
 
+    @_safe_execute("Export JSON")
     def execute(self, context):
         from ..exporters import json_export
         settings = context.scene.procgen_maps
@@ -501,7 +667,7 @@ class PROCGEN_OT_export_json(bpy.types.Operator):
         }
         filepath = _resolve_export_path(context, "procgen_maps.json")
         json_export.export_json(filepath, stats)
-        self.report({'INFO'}, f"Exported JSON metadata to {filepath}")
+        _say(self, context, f"Exported JSON metadata to {filepath}")
         return {'FINISHED'}
 
 
@@ -512,12 +678,13 @@ class PROCGEN_OT_render_showcase(bpy.types.Operator):
                        "still (procedural sky, raytraced glass/materials)")
     bl_options = {'REGISTER'}
 
+    @_safe_execute("Render Showcase Image")
     def execute(self, context):
         from ..rendering import framing, showcase
 
         root = bpy.data.collections.get(ROOT_COLLECTION_NAME)
         if root is None:
-            self.report({'ERROR'}, "Nothing generated yet - generate terrain or a city first")
+            _say(self, context, "Nothing generated yet - generate terrain or a city first", 'ERROR')
             return {'CANCELLED'}
 
         settings = context.scene.procgen_maps
@@ -534,7 +701,7 @@ class PROCGEN_OT_render_showcase(bpy.types.Operator):
         showcase.render_showcase(filepath, resolution=(settings.showcase_width, settings.showcase_height),
                                  samples=settings.showcase_samples)
 
-        self.report({'INFO'}, f"Showcase render saved to {filepath}")
+        _say(self, context, f"Showcase render saved to {filepath}")
         return {'FINISHED'}
 
 
@@ -550,6 +717,7 @@ class PROCGEN_OT_render_interior(bpy.types.Operator):
                        "that limitation. Cycles is slower (roughly a minute or two)")
     bl_options = {'REGISTER'}
 
+    @_safe_execute("Render Interior View")
     def execute(self, context):
         from ..rendering import showcase
 
@@ -557,7 +725,7 @@ class PROCGEN_OT_render_interior(bpy.types.Operator):
         if target is None or target.get("procgen_maps_facade_type") is None:
             target = next((obj for obj in bpy.data.objects if obj.get("procgen_maps_facade_type") is not None), None)
         if target is None:
-            self.report({'ERROR'}, "No building found - generate a city first (or select a building)")
+            _say(self, context, "No building found - generate a city first (or select a building)", 'ERROR')
             return {'CANCELLED'}
 
         settings = context.scene.procgen_maps
@@ -577,7 +745,7 @@ class PROCGEN_OT_render_interior(bpy.types.Operator):
             resolution=(min(settings.showcase_width, 1920), min(settings.showcase_height, 1080)),
             samples=settings.showcase_samples)
 
-        self.report({'INFO'}, f"Interior view of {target.name} saved to {filepath} (this took a while - Cycles)")
+        _say(self, context, f"Interior view of {target.name} saved to {filepath}")
         return {'FINISHED'}
 
 
@@ -589,6 +757,7 @@ class PROCGEN_OT_validate_map(bpy.types.Operator):
                       "datablocks; summary in the panel, full report in the system console")
     bl_options = {'REGISTER'}
 
+    @_safe_execute("Validate Map")
     def execute(self, context):
         from .. import validation
 
@@ -607,7 +776,7 @@ class PROCGEN_OT_validate_map(bpy.types.Operator):
         text = report.format()
         print("[Procgen Maps] Validate Map\n" + text)
         settings.validation_summary = report.summary()
-        self.report({'INFO'} if report.ok else {'WARNING'}, report.summary())
+        _say(self, context, report.summary(), 'INFO' if report.ok else 'WARNING')
         return {'FINISHED'}
 
 
@@ -617,6 +786,10 @@ classes = (
     PROCGEN_OT_generate_dungeon,
     PROCGEN_OT_generate_all,
     PROCGEN_OT_randomize_seed,
+    PROCGEN_OT_save_user_preset,
+    PROCGEN_OT_load_user_preset,
+    PROCGEN_OT_delete_user_preset,
+    PROCGEN_OT_open_user_presets_dir,
     PROCGEN_OT_export_gltf,
     PROCGEN_OT_export_fbx,
     PROCGEN_OT_export_usdz,
