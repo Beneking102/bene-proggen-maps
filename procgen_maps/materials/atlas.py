@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple
 
 @dataclass(frozen=True)
 class PackedRect:
+    """One rectangle's placement in the packed atlas."""
     index: int
     x: int
     y: int

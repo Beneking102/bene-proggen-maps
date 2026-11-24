@@ -25,6 +25,7 @@ HEIGHT_CLEARANCE = 6.0      # meters; extra camera height above the raw height_f
 
 @dataclass(frozen=True)
 class FramingPlan:
+    """Where a showcase camera stands, where it looks, its lens and clip distance."""
     center: Tuple[float, float, float]
     camera_location: Tuple[float, float, float]
     look_at: Tuple[float, float, float]

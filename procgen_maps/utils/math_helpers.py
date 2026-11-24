@@ -2,10 +2,12 @@
 
 
 def lerp(a, b, t):
+    """Linear interpolation from `a` to `b` by `t`."""
     return a + (b - a) * t
 
 
 def clamp(value, lo, hi):
+    """`value` limited to [lo, hi]."""
     return max(lo, min(hi, value))
 
 
@@ -18,6 +20,7 @@ def remap(value, in_min, in_max, out_min, out_max):
 
 
 def smoothstep(edge0, edge1, x):
+    """Hermite smoothstep of `x` between `edge0` and `edge1`."""
     if edge1 == edge0:
         return 0.0 if x < edge0 else 1.0
     t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)

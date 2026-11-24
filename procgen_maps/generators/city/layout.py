@@ -29,12 +29,14 @@ _MERGE_CHANCE = 0.22                 # raster mode: chance a lot merges with its
 
 @dataclass
 class Block:
+    """One city block: id, centre, half size and the lot index it came from."""
     id: int
     center: Tuple[float, float]
     half_size: Tuple[float, float]  # (half_width, half_height), world units
 
     @property
     def polygon(self) -> List[Tuple[float, float]]:
+        """The block's rectangle as four (x, y) corners."""
         cx, cy = self.center
         hw, hh = self.half_size
         return [
@@ -51,6 +53,7 @@ class Block:
 
 @dataclass
 class StreetSegment:
+    """One straight street piece between two points with its class (arterial / local / country)."""
     id: int
     start: Tuple[float, float]
     end: Tuple[float, float]
@@ -70,6 +73,7 @@ class RiverSpec:
     x_range: Tuple[float, float] = (0.0, 0.0)   # the street lines bounding the river column
 
     def distance(self, x: float, y: float) -> float:
+        """Length of the segment in meters."""
         best = math.inf
         for (ax, ay), (bx, by) in zip(self.points, self.points[1:]):
             dx, dy = bx - ax, by - ay
@@ -90,6 +94,7 @@ class RiverSpec:
 
 @dataclass
 class CityLayout:
+    """The layout stage's result: blocks, street segments, the city radius and the river."""
     blocks: List[Block] = field(default_factory=list)
     streets: List[StreetSegment] = field(default_factory=list)
     radius: float = 0.0

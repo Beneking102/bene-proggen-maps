@@ -61,6 +61,7 @@ _FACADE_COLORS = (
 
 
 def get_or_create_city_material():
+    """The shared facade material (created once; per-building colour/tint from object properties)."""
     import bpy
 
     from . import atmosphere

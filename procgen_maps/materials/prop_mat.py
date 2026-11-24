@@ -71,6 +71,7 @@ _CAR_PALETTE = (
 
 
 def get_or_create_prop_material(key: str):
+    """The shared prop material for `category` (created once; per-instance variation via Object Info)."""
     import bpy
 
     from . import atmosphere

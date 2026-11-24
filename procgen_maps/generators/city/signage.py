@@ -96,6 +96,7 @@ _TRAFFIC_LIGHT_LENS_THICKNESS = 0.02
 
 @dataclass
 class SignPlacement:
+    """One placed sign: kind, text, location, heading."""
     kind: str                              # 'stop' | 'speed_limit' | 'street_name'
     location: Tuple[float, float, float]   # (x, y, z) - z already sampled from terrain, like PropPlacement
     rotation_z: float = 0.0

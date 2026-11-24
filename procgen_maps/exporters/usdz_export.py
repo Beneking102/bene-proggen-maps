@@ -11,6 +11,7 @@ USDZ, not that Quick Look will accept it.
 
 
 def export_usdz(filepath: str) -> None:
+    """Export the scene to `filepath` with Blender's USD exporter (best effort: .usdz needs a USD build)."""
     import bpy
 
     if not filepath.endswith(".usdz"):

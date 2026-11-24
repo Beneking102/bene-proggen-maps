@@ -83,6 +83,7 @@ _THEME_FILL_COLOR = {
 
 @dataclass(frozen=True)
 class DungeonParams:
+    """BSP tuning, theme and level count of one dungeon (frozen, hashable)."""
     width: float = 60.0
     height: float = 60.0
     min_room_size: float = 6.0
@@ -101,6 +102,7 @@ class DungeonParams:
 
 @dataclass
 class Room:
+    """One BSP leaf room: rect, type (start / boss / normal) and level."""
     id: int
     x: float
     y: float
@@ -110,19 +112,23 @@ class Room:
 
     @property
     def rect(self) -> Tuple[float, float, float, float]:
+        """(min_x, min_y, max_x, max_y) of the room."""
         return (self.x, self.y, self.x + self.width, self.y + self.height)
 
     @property
     def center(self) -> Tuple[float, float]:
+        """The room's centre (x, y)."""
         return (self.x + self.width / 2.0, self.y + self.height / 2.0)
 
     @property
     def area(self) -> float:
+        """The room's floor area in square meters."""
         return self.width * self.height
 
 
 @dataclass
 class Corridor:
+    """An L-shaped corridor between two rooms on one level, as its two straight legs."""
     id: int
     start: Tuple[float, float]
     end: Tuple[float, float]
@@ -148,6 +154,7 @@ class Stairs:
 
 @dataclass
 class DungeonLayout:
+    """The pure-Python plan: rooms, corridors, stairs, features and props per level."""
     rooms: List[Room] = field(default_factory=list)
     corridors: List[Corridor] = field(default_factory=list)
     wall_height: float = 3.0
@@ -157,15 +164,19 @@ class DungeonLayout:
     theme: str = "crypt"
 
     def rooms_on(self, level: int) -> List[Room]:
+        """The rooms on `level`."""
         return [room for room in self.rooms if room.level == level]
 
     def corridors_on(self, level: int) -> List[Corridor]:
+        """The corridors on `level`."""
         return [corridor for corridor in self.corridors if corridor.level == level]
 
     def level_z(self, level: int) -> float:
+        """The floor height of `level` (0 = top, lower levels are negative)."""
         return -level * self.level_drop
 
     def stair_rects_in(self, room: Room) -> List[Tuple[float, float, float, float]]:
+        """The stair flight rects that lie in `room`."""
         return [s.rect for s in self.stairs if (s.upper_room_id == room.id and s.upper_level == room.level)
                 or (s.lower_room_id == room.id and s.lower_level == room.level)]
 

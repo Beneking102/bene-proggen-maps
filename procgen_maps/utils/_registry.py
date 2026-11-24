@@ -10,6 +10,7 @@ _logger = get_logger("registry")
 
 
 def register_classes(classes):
+    """bpy.utils.register_class for each class, skipping ones already registered."""
     import bpy
 
     for cls in classes:
@@ -20,6 +21,7 @@ def register_classes(classes):
 
 
 def unregister_classes(classes):
+    """bpy.utils.unregister_class in reverse order, skipping ones not registered."""
     import bpy
 
     for cls in reversed(classes):

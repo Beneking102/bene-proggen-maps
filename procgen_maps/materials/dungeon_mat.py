@@ -68,6 +68,7 @@ _BUMP_STRENGTH = {"crypt": 0.35, "cave": 0.6, "castle": 0.25}
 
 
 def get_or_create_dungeon_material(key: str, theme: str = "crypt"):
+    """The dungeon stone material for `theme` (created once per theme)."""
     import bpy
 
     theme = theme if theme in _THEME_COLORS else "crypt"

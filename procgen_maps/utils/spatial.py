@@ -20,6 +20,7 @@ class SpatialHashGrid:
         return (math.floor(x / self.cell_size), math.floor(y / self.cell_size))
 
     def insert(self, item_id, x, y, radius=0.0):
+        """Register a circle (id, centre, radius) in the grid."""
         cell = self._cell_coord(x, y)
         self._cells.setdefault(cell, []).append((item_id, x, y, radius))
         # A query's cell search span is derived from radius sums (see
@@ -32,6 +33,7 @@ class SpatialHashGrid:
         self._max_radius = max(self._max_radius, radius)
 
     def remove(self, item_id, x, y):
+        """Forget the circle registered under `item_id`."""
         cell = self._cell_coord(x, y)
         bucket = self._cells.get(cell)
         if not bucket:

@@ -31,6 +31,7 @@ _FOOTPRINT_SHRINK_CAP = 0.97  # never quite touch the block's own edge
 
 @dataclass(frozen=True)
 class SpecialBuildingSpec:
+    """One special building kind: facade, size, sign text, which zone it wants."""
     facade: FacadeType
     sign_text: str
     sign_color: Tuple[float, float, float, float]

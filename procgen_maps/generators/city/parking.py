@@ -28,6 +28,7 @@ _LINE_WIDTH = 0.12
 
 @dataclass(frozen=True)
 class ParkingLotSpec:
+    """A parking lot next to a supermarket: centre, half size, stall layout."""
     block_id: int
     cx: float
     cy: float
@@ -37,6 +38,7 @@ class ParkingLotSpec:
 
 @dataclass(frozen=True)
 class ParkingStall:
+    """One painted stall: position, heading and whether a car is parked in it."""
     x: float
     y: float
     rotation_z: float

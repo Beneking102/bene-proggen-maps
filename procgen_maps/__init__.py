@@ -6,7 +6,7 @@ split convention followed throughout this addon.
 bl_info = {
     "name": "Procgen Maps",
     "author": "Beneking102",
-    "version": (0, 14, 0),
+    "version": (0, 15, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Procgen Maps",
     "description": "Procedural city, terrain and dungeon generator with glTF/FBX/USDZ/SVG/JSON export",

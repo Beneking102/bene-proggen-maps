@@ -61,6 +61,7 @@ _SAWTOOTH_CHANCE = 0.7      # share of factory halls with a sawtooth roof
 
 @dataclass(frozen=True)
 class FacadeType:
+    """One facade archetype: key, zone, floor/size ranges, window layout and colour index."""
     key: str
     zone_pool: Tuple[str, ...]     # zones allowed to use this facade
     window_frequency: float        # 0..1, chance each window bay gets a recessed window
@@ -143,6 +144,7 @@ def window_lighting(rng: random.Random, columns: int, lighting: str, floor_state
 
 @dataclass
 class BuildingPlan:
+    """One planned building: block id, footprint polygon, floors, floor height, facade, tint."""
     block_id: int
     footprint: List[Tuple[float, float]]
     floors: int

@@ -8,6 +8,7 @@ _ROOT_NAME = "procgen_maps"
 
 
 def get_logger(name=None):
+    """A `procgen_maps.<name>` logger, with the package's console handler installed once."""
     full_name = _ROOT_NAME if not name else f"{_ROOT_NAME}.{name}"
     root = logging.getLogger(_ROOT_NAME)
     if not root.handlers:

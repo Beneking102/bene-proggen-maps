@@ -29,6 +29,7 @@ _PATH_CHUNK = 4.0
 
 @dataclass
 class ParkSpec:
+    """One park (path cross + fountain) or plaza (paved) on a block."""
     block_id: int
     kind: str                       # 'park' | 'plaza'
     center: Tuple[float, float]

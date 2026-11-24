@@ -19,6 +19,7 @@ _SEGMENTS_BY_DETAIL = {"high": 10, "medium": 6, "low": 4}
 
 @dataclass(frozen=True)
 class AssetDef:
+    """One procedural placeholder asset: id, category, collision footprint and its mesh builder."""
     asset_id: str
     category: str            # 'tree' | 'lamp' | 'bench' | 'car' | 'sign' | 'rooftop' | 'furniture'
     footprint_radius: float  # meters, used for collision placement
@@ -172,14 +173,17 @@ FURNITURE_BY_FACADE: Dict[str, List[str]] = {
 
 
 def get_asset(asset_id: str) -> AssetDef:
+    """The AssetDef registered under `asset_id` (KeyError if unknown)."""
     if asset_id not in ASSET_DEFS:
         raise KeyError(f"Unknown asset id '{asset_id}'. Available: {', '.join(ASSET_DEFS)}")
     return ASSET_DEFS[asset_id]
 
 
 def assets_in_category(category: str) -> List[AssetDef]:
+    """Every asset id whose category matches."""
     return [a for a in ASSET_DEFS.values() if a.category == category]
 
 
 def tree_asset_ids() -> List[str]:
+    """The ids of all tree variants, in registration order."""
     return [a.asset_id for a in assets_in_category("tree")]

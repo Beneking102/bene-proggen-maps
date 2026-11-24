@@ -6,11 +6,13 @@ from contextlib import contextmanager
 
 
 class Profiler:
+    """Named timing stages (`with profiler.stage(name)`) and their total."""
     def __init__(self):
         self._durations = {}
 
     @contextmanager
     def stage(self, name):
+        """Context manager timing one named stage."""
         start = time.perf_counter()
         try:
             yield
@@ -19,12 +21,15 @@ class Profiler:
             self._durations[name] = self._durations.get(name, 0.0) + elapsed
 
     def report(self):
+        """The stage timings as text."""
         return dict(self._durations)
 
     def total_time(self):
+        """Sum of every stage's seconds."""
         return sum(self._durations.values())
 
     def reset(self):
+        """Forget every recorded stage."""
         self._durations.clear()
 
 

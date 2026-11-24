@@ -7,7 +7,7 @@ signage, the validator) handles them without special cases.
 """
 import math
 import random
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from .buildings import FACADE_TYPES, BuildingPlan
 from .layout import CityLayout, StreetSegment

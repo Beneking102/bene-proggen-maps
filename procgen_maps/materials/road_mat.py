@@ -124,6 +124,7 @@ class _NodeBuilder:
 
 
 def get_or_create_road_material():
+    """The shared asphalt material with procedural markings (created once)."""
     import bpy
 
     existing = bpy.data.materials.get(ROAD_MATERIAL_NAME)
@@ -212,6 +213,7 @@ def get_or_create_road_material():
 
 
 def get_or_create_sidewalk_material():
+    """The shared sidewalk concrete material (created once)."""
     import bpy
 
     existing = bpy.data.materials.get(SIDEWALK_MATERIAL_NAME)

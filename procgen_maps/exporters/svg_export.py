@@ -13,11 +13,13 @@ Point3 = Tuple[float, float, float]
 
 
 def project_top_down(polygons_world: Iterable[Sequence[Point3]]) -> List[List[Point2]]:
+    """World (x, y, z) -> the (x, y) the SVG map uses (a straight top-down projection)."""
     return [[(x, y) for (x, y, z) in polygon] for polygon in polygons_world]
 
 
 def build_svg_document(polygons_2d: List[List[Point2]], width=1000, height=1000, padding=20,
                         fill_color="#cccccc", stroke_color="#333333") -> str:
+    """The SVG text for a list of (name, [(x, y, z) corners]) object footprints. Pure Python."""
     header = '<?xml version="1.0" encoding="UTF-8"?>\n'
     if not polygons_2d:
         return (
@@ -60,6 +62,7 @@ def build_svg_document(polygons_2d: List[List[Point2]], width=1000, height=1000,
 
 
 def export_svg(filepath: str, objects) -> None:
+    """Write the top-down SVG map of the given mesh objects to `filepath`."""
     import bpy
 
     footprints: List[List[Point3]] = []

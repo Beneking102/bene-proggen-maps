@@ -9,6 +9,7 @@ the City/Terrain/Dungeon hierarchy).
 
 
 def export_gltf(filepath: str, options=None) -> None:
+    """Plain glTF/GLB export: the game export with every extra off unless `options` says otherwise."""
     from . import game_export
 
     if options is None:
